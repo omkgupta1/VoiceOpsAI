@@ -18,7 +18,7 @@ AI_DIR := services/ai
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
         migrate migrate-status seed db-reset chaos chaos-status chaos-off \
-        ai eval test-gate
+        ai eval test-gate test-voice
 
 help: ## Show this help
 	@echo ""
@@ -103,6 +103,9 @@ eval: ## Measure tool-selection accuracy (make eval RUNS=3 for a stabler number)
 
 test-gate: ## Verify the confirmation gate still blocks unconfirmed booking changes
 	@cd $(AI_DIR) && uv run python test_confirmation_gate.py
+
+test-voice: ## Speak questions at the agent and check it hears and acts on them
+	@cd $(AI_DIR) && uv run python test_voice_loop.py
 
 
 psql: ## Open a psql shell against the local database

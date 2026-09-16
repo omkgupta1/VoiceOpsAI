@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 3 — AI service: providers + text pipeline ✅ complete |
-| **Next** | Phase 4 — Voice in and out (browser mic → STT → agent → TTS) |
-| **What runs today** | Postgres, Redis, the flight service, and a working text agent |
+| **Phase** | 4 — Voice in and out ✅ complete |
+| **Next** | Phase 5 — Configurable voice-bot flows |
+| **What runs today** | A working voice agent: speak into the browser, hear a grounded answer |
 
 ### How to start everything
 
@@ -24,15 +24,18 @@ make seed      # load sample data
 make doctor    # verify the whole toolchain is healthy
 ```
 
-`make ai` starts the agent (run it in its own terminal). Talk to it:
+`make ai` starts the agent (run it in its own terminal), then open
+**http://localhost:8000** and hold the button or spacebar to talk.
+
+Or over HTTP:
 
 ```bash
 curl -s localhost:8000/v1/turn -H 'content-type: application/json' \
   -d '{"message":"is flight AI858 delayed?"}' | python3 -m json.tool
 ```
 
-`make eval RUNS=3` measures tool-selection accuracy; `make test-gate` checks the
-confirmation gate. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
+`make eval RUNS=3` measures tool-selection accuracy, `make test-gate` checks the
+confirmation gate, and `make test-voice` speaks questions at the agent end to end. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
 want a clean slate. Seeded dashboard logins are `admin@voiceops.ai`,
 `supervisor@voiceops.ai`, `agent1@voiceops.ai`, `agent2@voiceops.ai`, all with
 password `voiceops123`.
@@ -68,6 +71,79 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 4: Voice in and out ✅
+
+**Built:** `POST /v1/turn/audio` — audio in, audio out — and a push-to-talk console at
+http://localhost:8000. Speak into the browser, hear a grounded answer. Full notes in
+[docs/voice.md](docs/voice.md).
+
+**Measured latency** (M5, `small.en` + qwen2.5:7b + Piper):
+
+| Stage | Typical |
+|---|---|
+| STT | 490–610 ms |
+| LLM | 2,500–6,200 ms |
+| Tools | 12–25 ms |
+| TTS | 640–1,120 ms |
+
+The LLM dominates by an order of magnitude. Neither speech stage is worth optimising
+until that changes, and the cheapest fix is `LLM_PROVIDER=groq` — which is exactly what
+the provider interface was built for.
+
+---
+
+**The finding that mattered: speech recognition mangles precisely the values this system
+cannot get wrong.**
+
+| Spoken | Transcribed |
+|---|---|
+| `AI858` | `AI 858` — a space, on both model sizes |
+| `AI858` | `AIA-858` — `base.en` inventing a letter |
+| `booking 7MGFXC` | `Pooking7MGFXC` — word mangled, reference intact |
+
+The first real audio turn failed because of this: `AI858` arrived as `I 858`, the lookup
+returned `FLIGHT_NOT_FOUND`, and the agent politely told the customer their flight did not
+exist. Nothing in the text pipeline could have caught it.
+
+Two fixes, both needed:
+
+1. **Identifiers are normalised at the tool boundary** — strip spaces, hyphens, dots and
+   commas, then upper-case. Placed in the AI service, where noisy speech meets structured
+   data, rather than in the flight service, which is a backend API and should stay strict
+   about what it accepts.
+2. **`small.en` replaced `base.en` as the default.** `base.en` hallucinates letters into
+   flight numbers. The accuracy costs ~240 ms (216 → 458 ms on a 3-second clip), which is
+   noise beside a 4-second LLM call. Having downloaded both in Phase 0 made this a
+   one-line change rather than a detour.
+
+**Decisions made:**
+
+- **Silence is answered without calling the model.** An empty transcript returns "Sorry, I
+  didn't catch that." Passing an empty string to the model produces a confident reply to
+  nothing at all.
+- **The transcript is returned alongside the reply.** A wrong answer is usually a misheard
+  question, and without the transcript you cannot tell those apart — which is precisely
+  how the `AI858` bug was diagnosed.
+- **TTS failure degrades to a silent reply** rather than failing the turn. The text is
+  already correct and the caller can still show it.
+- **Audio comes back as base64 in the JSON.** One round trip carries the reply, what we
+  heard, and what the agent did. Phase 12 moves it to S3.
+- **Push-to-talk, not voice activity detection.** The turn boundary is unambiguous, which
+  matters because the confirmation gate is turn-based.
+
+**Verified:**
+- `make test-voice` — 4/4 spoken questions resolve to the correct successful tool call,
+  including one where whisper turned "booking" into "Pooking" and the reference still
+  survived normalisation
+- Delay data read back correctly from a real row: "Flight AI 858 is delayed by 2 hours"
+- Browser console loads, records, posts and plays the reply
+
+**Next:** Phase 5 — configurable flows. This is also the structural fix for the Phase 3
+finding that a 7B model degrades when offered seven tools at once: flows narrow the tool
+set per conversational state, and `make eval` will show whether that works.
+
+---
 
 ### 2026-09-17 — Phase 3: AI service, providers and the text pipeline ✅
 

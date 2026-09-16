@@ -9,6 +9,7 @@ so they say when *not* to use a tool as much as when to.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -94,34 +95,62 @@ async def _call(
     return ToolResult.success(body, duration_ms=elapsed_ms)
 
 
+# Everything a speech-to-text pass tends to sprinkle into an identifier:
+# spaces, hyphens, dots, and the occasional trailing full stop.
+_NOISE = re.compile(r"[\s\-.,_]+")
+
+
+def _normalise_identifier(value: str) -> str:
+    """
+    Strip transcription noise out of a flight number or booking reference.
+
+    Speech recognition reliably inserts a space into alphanumerics: "AI858"
+    comes back as "AI 858", and an exact-match lookup then fails on a flight
+    that exists. Measured on both whisper models, so it is a property of the
+    task rather than of one model size.
+
+    This belongs here, at the boundary where noisy speech meets a structured
+    identifier, rather than in the flight service — which is a backend API and
+    should stay strict about what it accepts.
+    """
+    return _NOISE.sub("", (value or "")).upper()
+
+
 # ---------- Handlers ----------
 
 
 async def check_flight_status(flight_number: str) -> ToolResult:
-    return await _call("GET", f"/v1/flights/{flight_number}/status", shape="status")
+    number = _normalise_identifier(flight_number)
+    return await _call("GET", f"/v1/flights/{number}/status", shape="status")
 
 
 async def get_booking(pnr: str) -> ToolResult:
-    return await _call("GET", f"/v1/bookings/{pnr}", shape="booking")
+    return await _call("GET", f"/v1/bookings/{_normalise_identifier(pnr)}", shape="booking")
 
 
 async def cancel_booking(pnr: str) -> ToolResult:
-    return await _call("POST", f"/v1/bookings/{pnr}/cancel", shape="cancel")
+    return await _call(
+        "POST", f"/v1/bookings/{_normalise_identifier(pnr)}/cancel", shape="cancel"
+    )
 
 
 async def get_reschedule_options(pnr: str) -> ToolResult:
-    return await _call("GET", f"/v1/bookings/{pnr}/reschedule-options", shape="options")
+    return await _call(
+        "GET", f"/v1/bookings/{_normalise_identifier(pnr)}/reschedule-options", shape="options"
+    )
 
 
 async def reschedule_booking(pnr: str, flight_id: str) -> ToolResult:
     return await _call(
-        "POST", f"/v1/bookings/{pnr}/reschedule", shape="reschedule",
+        "POST", f"/v1/bookings/{_normalise_identifier(pnr)}/reschedule", shape="reschedule",
         json_body={"flight_id": flight_id},
     )
 
 
 async def check_refund_status(pnr: str) -> ToolResult:
-    return await _call("GET", f"/v1/bookings/{pnr}/refunds", shape="refunds")
+    return await _call(
+        "GET", f"/v1/bookings/{_normalise_identifier(pnr)}/refunds", shape="refunds"
+    )
 
 
 async def escalate_to_human(reason: str) -> ToolResult:

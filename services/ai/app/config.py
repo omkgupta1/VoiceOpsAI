@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # These run natively on the host, never in Docker: Docker Desktop on macOS
     # has no Metal passthrough. See ADR 0001.
     whisper_bin: str = "whisper-cli"
-    whisper_model: str = "./models/whisper/ggml-base.en.bin"
+    whisper_model: str = "./models/whisper/ggml-small.en.bin"
     piper_bin: str = "piper"
     piper_voice: str = "./models/piper/en_US-lessac-medium.onnx"
     ollama_base_url: str = "http://localhost:11434"

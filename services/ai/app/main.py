@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 # Importing the tools module is what registers them.
 import app.tools.flight  # noqa: F401
@@ -75,6 +77,15 @@ async def health() -> dict:
 
 
 app.include_router(router)
+
+_CONSOLE = Path(__file__).parent / "static" / "console.html"
+
+
+@app.get("/", include_in_schema=False)
+async def console() -> FileResponse:
+    """A push-to-talk page for talking to the agent. Served same-origin to keep
+    the microphone permission and the API on one host."""
+    return FileResponse(_CONSOLE)
 
 
 if __name__ == "__main__":

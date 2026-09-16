@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VoiceOps Console</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f8; --panel: #fff; --ink: #18181b; --muted: #71717a;
+    --line: #e4e4e7; --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#09090b; --panel:#18181b; --ink:#fafafa; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui, sans-serif; }
+  .wrap { max-width: 760px; margin:0 auto; padding:24px 16px 48px; }
+  header { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
+  h1 { font-size:18px; margin:0; letter-spacing:-.01em; }
+  .sub { color:var(--muted); font-size:13px; }
+  .status { font-family:var(--mono); font-size:12px; color:var(--muted); margin:12px 0 20px; }
+  .status b { color:var(--ink); font-weight:600; }
+
+  .mic { width:100%; padding:22px; border:1px solid var(--line); border-radius:14px;
+         background:var(--panel); color:var(--ink); font:600 15px system-ui,sans-serif;
+         cursor:pointer; user-select:none; -webkit-user-select:none; touch-action:manipulation;
+         transition:background .12s, border-color .12s, transform .06s; }
+  .mic:hover:not(:disabled) { border-color:var(--accent); }
+  .mic:disabled { opacity:.55; cursor:default; }
+  .mic.recording { background:var(--err); border-color:var(--err); color:#fff; transform:scale(.995); }
+  .hint { text-align:center; color:var(--muted); font-size:12px; margin:10px 0 24px; }
+
+  .turn { border:1px solid var(--line); border-radius:12px; background:var(--panel);
+          padding:14px 16px; margin-bottom:12px; }
+  .who { font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+         color:var(--muted); margin-bottom:6px; }
+  .said { font-size:15px; }
+  .meta { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line);
+          font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .tool { margin-top:4px; }
+  .ok { color:var(--ok); } .blocked { color:var(--warn); } .bad { color:var(--err); }
+  .pill { display:inline-block; padding:1px 7px; border-radius:99px; font-size:10.5px;
+          border:1px solid currentColor; margin-left:6px; }
+  audio { width:100%; margin-top:10px; height:34px; }
+  .empty { color:var(--muted); text-align:center; padding:28px 0; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>VoiceOps Console</h1>
+    <span class="sub">hold to talk &middot; release to send</span>
+  </header>
+  <div class="status" id="status">connecting&hellip;</div>
+
+  <button class="mic" id="mic" disabled>Hold to talk</button>
+  <div class="hint">or hold the <b>spacebar</b></div>
+
+  <div id="log"><div class="empty">No turns yet. Try: &ldquo;is flight AI858 delayed?&rdquo;</div></div>
+</div>
+
+<script>
+const micEl = document.getElementById('mic');
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+
+let recorder = null, chunks = [], stream = null, callId = null, busy = false, recording = false;
+
+async function boot() {
+  try {
+    const health = await (await fetch('/health')).json();
+    const p = health.providers || {};
+    statusEl.innerHTML = `stt <b>${p.stt}</b> &middot; llm <b>${p.llm}</b> &middot; tts <b>${p.tts}</b>`;
+  } catch { statusEl.textContent = 'AI service unreachable'; return; }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micEl.disabled = false;
+  } catch {
+    statusEl.textContent += ' — microphone blocked. Allow access and reload.';
+  }
+}
+
+function start() {
+  if (busy || recording || !stream) return;
+  chunks = [];
+  // Let the browser pick its own container; ffmpeg normalises it server side.
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = send;
+  recorder.start();
+  recording = true;
+  micEl.classList.add('recording');
+  micEl.textContent = 'Listening… release to send';
+}
+
+function stop() {
+  if (!recording) return;
+  recording = false;
+  recorder.stop();
+  micEl.classList.remove('recording');
+  micEl.textContent = 'Hold to talk';
+}
+
+async function send() {
+  const blob = new Blob(chunks, { type: recorder.mimeType });
+  // A stab at the button produces a few bytes of nothing; not worth a round trip.
+  if (blob.size < 1200) return;
+
+  busy = true; micEl.disabled = true; micEl.textContent = 'Thinking…';
+  const started = performance.now();
+
+  const form = new FormData();
+  form.append('audio', blob, 'turn.webm');
+  if (callId) form.append('call_id', callId);
+
+  try {
+    const res = await fetch('/v1/turn/audio', { method: 'POST', body: form });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      render({ transcript: '', reply: (err.error && err.error.message) || `HTTP ${res.status}`,
+               failed: true, timings: {}, tool_calls: [] });
+      return;
+    }
+    const data = await res.json();
+    callId = data.call_id;
+    data.round_trip_ms = Math.round(performance.now() - started);
+    render(data);
+  } catch (e) {
+    render({ transcript: '', reply: String(e), failed: true, timings: {}, tool_calls: [] });
+  } finally {
+    busy = false; micEl.disabled = false; micEl.textContent = 'Hold to talk';
+  }
+}
+
+function render(d) {
+  const first = logEl.querySelector('.empty');
+  if (first) first.remove();
+
+  if (d.transcript) {
+    const you = document.createElement('div');
+    you.className = 'turn';
+    you.innerHTML = `<div class="who">You</div><div class="said"></div>`;
+    you.querySelector('.said').textContent = d.transcript;
+    logEl.appendChild(you);
+  }
+
+  const agent = document.createElement('div');
+  agent.className = 'turn';
+  const t = d.timings || {};
+  const bits = [];
+  if (t.stt_ms != null) bits.push(`stt ${t.stt_ms}ms`);
+  if (t.llm_ms) bits.push(`llm ${t.llm_ms}ms`);
+  if (t.tools_ms) bits.push(`tools ${t.tools_ms}ms`);
+  if (t.tts_ms) bits.push(`tts ${t.tts_ms}ms`);
+  if (d.round_trip_ms) bits.push(`round trip ${d.round_trip_ms}ms`);
+
+  let flags = '';
+  if (d.intent) flags += `<span class="pill">${d.intent}</span>`;
+  if (d.awaiting_confirmation) flags += `<span class="pill blocked">awaiting confirmation</span>`;
+  if (d.escalated) flags += `<span class="pill bad">escalated</span>`;
+
+  const tools = (d.tool_calls || []).map(c => {
+    const cls = c.ok ? 'ok' : (c.error_code === 'CONFIRMATION_REQUIRED' ? 'blocked' : 'bad');
+    const outcome = c.ok ? 'ok' : c.error_code;
+    return `<div class="tool ${cls}">→ ${c.name}(${JSON.stringify(c.arguments)}) ${outcome} ${c.duration_ms}ms</div>`;
+  }).join('');
+
+  agent.innerHTML = `<div class="who">Agent${flags}</div><div class="said"></div>` +
+    ((tools || bits.length) ? `<div class="meta">${tools}${bits.length ? '<div class="tool">'+bits.join(' · ')+'</div>' : ''}</div>` : '');
+  agent.querySelector('.said').textContent = d.reply;
+  if (d.failed) agent.querySelector('.said').classList.add('bad');
+
+  if (d.audio && d.audio.base64) {
+    const el = document.createElement('audio');
+    el.controls = true;
+    el.src = `data:${d.audio.mime_type};base64,${d.audio.base64}`;
+    agent.appendChild(el);
+    el.play().catch(() => {});   // autoplay may be blocked; controls remain
+  }
+
+  logEl.appendChild(agent);
+  agent.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+micEl.addEventListener('mousedown', start);
+micEl.addEventListener('touchstart', e => { e.preventDefault(); start(); }, { passive: false });
+['mouseup','mouseleave','touchend','touchcancel'].forEach(ev =>
+  micEl.addEventListener(ev, stop));
+addEventListener('keydown', e => { if (e.code === 'Space' && !e.repeat && e.target === document.body) { e.preventDefault(); start(); } });
+addEventListener('keyup',   e => { if (e.code === 'Space') { e.preventDefault(); stop(); } });
+
+boot();
+</script>
+</body>
+</html>
