@@ -36,6 +36,8 @@ class TurnResponse(BaseModel):
     # making it. The Phase 8 dashboard surfaces this as a distinct call state.
     awaiting_confirmation: bool
     flow: dict
+    # Operations handed to the queue because they failed transiently mid-call.
+    queued_jobs: list[dict]
 
 
 # Said back when the microphone produced no words. Short on purpose: it is
@@ -110,7 +112,7 @@ async def turn(request: TurnRequest) -> TurnResponse:
     try:
         result = await run_turn(
             request.message, llm=get_llm(), history=history, informed_bookings=informed,
-            flow_id=flow_id, flow_state=flow_state,
+            flow_id=flow_id, flow_state=flow_state, call_id=call_id,
         )
     except ProviderError as exc:
         # Surfaced with its retryable flag intact so the caller — and later the
@@ -140,6 +142,7 @@ async def turn(request: TurnRequest) -> TurnResponse:
         truncated=result.truncated,
         awaiting_confirmation=result.awaiting_confirmation,
         flow={"id": result.flow_id, "state": result.flow_state},
+        queued_jobs=result.queued_jobs,
     )
 
 
@@ -179,6 +182,7 @@ class AudioTurnResponse(BaseModel):
     truncated: bool
     awaiting_confirmation: bool
     flow: dict
+    queued_jobs: list[dict]
     audio: dict | None
 
 
@@ -220,7 +224,7 @@ async def audio_turn(
             timings={"stt_ms": transcript.duration_ms, "llm_ms": 0, "tts_ms": 0,
                      "tools_ms": 0, "total_ms": transcript.duration_ms},
             providers=providers, truncated=False, awaiting_confirmation=False,
-            flow={"id": "", "state": ""},
+            flow={"id": "", "state": ""}, queued_jobs=[],
             audio=await _speak(_NOTHING_HEARD),
         )
 
@@ -234,7 +238,7 @@ async def audio_turn(
     try:
         result = await run_turn(
             transcript.text, llm=get_llm(), history=history, informed_bookings=informed,
-            flow_id=flow_id, flow_state=flow_state,
+            flow_id=flow_id, flow_state=flow_state, call_id=resolved_call_id,
         )
     except ProviderError as exc:
         raise HTTPException(
@@ -273,6 +277,7 @@ async def audio_turn(
         truncated=result.truncated,
         awaiting_confirmation=result.awaiting_confirmation,
         flow={"id": result.flow_id, "state": result.flow_state},
+        queued_jobs=result.queued_jobs,
         audio=spoken,
     )
 

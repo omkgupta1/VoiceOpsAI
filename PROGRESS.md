@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 5 — Configurable flows ✅ complete |
-| **Next** | Phase 6 — Redis priority queue, scheduler and retry engine |
-| **What runs today** | A voice agent that services bookings through a configurable flow |
+| **Phase** | 6 — Redis queue, scheduler and retry engine ✅ complete |
+| **Next** | Phase 7 — Node platform API + auth |
+| **What runs today** | A voice agent whose confirmed work survives the call and the outage |
 
 ### How to start everything
 
@@ -36,7 +36,11 @@ curl -s localhost:8000/v1/turn -H 'content-type: application/json' \
 
 `make eval RUNS=3` measures tool selection (`MODE=compare` contrasts flow-scoped
 against offering every tool), `make test-gate` checks the confirmation gate, and
-`make test-voice` speaks questions at the agent end to end. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
+`make test-voice` speaks questions at the agent end to end.
+
+`make worker` runs the queue workers and scheduler (its own terminal), `make queue`
+shows depth and dead letters (`W=1` to watch live), and `make test-queue` checks
+priority, crash recovery, backoff, dead-lettering and idempotency. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
 want a clean slate. Seeded dashboard logins are `admin@voiceops.ai`,
 `supervisor@voiceops.ai`, `agent1@voiceops.ai`, `agent2@voiceops.ai`, all with
 password `voiceops123`.
@@ -72,6 +76,99 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 6: Redis queue, scheduler and retry engine ✅
+
+**Built:** the queue as a shared package ([packages/queue-py](packages/queue-py/)) and a
+worker service ([services/worker](services/worker/)), by hand on raw Redis primitives
+rather than with BullMQ — per [ADR 0003](docs/decisions/0003-hand-built-redis-queue.md),
+because the mechanics are the thing worth learning. Protocol in
+[docs/queue-protocol.md](docs/queue-protocol.md).
+
+Three guarantees, each bought with a specific mechanism:
+
+- **Priority** — `reserve` walks the ready lists highest-first, so an urgent callback
+  never queues behind a batch of follow-ups.
+- **At-least-once delivery** — a reserved job sits in a `processing` ZSET scored by a
+  lease deadline; if its worker dies the lease expires and the reaper returns it.
+- **Atomicity** — `reserve`, `promote` and `reap` are Lua scripts. "Pop, then record the
+  lease" as two round trips leaves a window where a crash loses the job, and that window
+  is exactly what the lease exists to close.
+
+**Wired to the voice pipeline.** When an operation the customer already confirmed fails
+transiently, it goes to the queue instead of dying with the call. The agent says so:
+
+> *"Your booking cancellation has been queued and will be processed automatically. You
+> don't need to call back, Rahul."*
+
+---
+
+**The demo that proves it.** Customer confirms a cancellation → flight service taken hard
+down mid-call → job queued → retries → service recovers → cancellation completes, with
+nobody watching:
+
+```
+attempt=1/5 FAILED (SERVICE_UNAVAILABLE) — retrying in 1.1s
+attempt=2/5 FAILED (SERVICE_UNAVAILABLE) — retrying in 3.5s
+attempt=3/5 FAILED (SERVICE_UNAVAILABLE) — retrying in 4.1s
+attempt=4/5 FAILED (SERVICE_UNAVAILABLE) — retrying in 12.1s
+attempt=5   OK in 19ms          → booking CANCELLED
+```
+
+**And crash recovery**, with the only worker holding the job `kill -9`'d:
+
+```
+recovered 1 job(s) from expired leases
+job=2c5973d1 type=check_refund_status priority=HIGH attempt=2 OK in 45ms
+```
+
+---
+
+**Full jitter was wrong, and only running it showed that.** The first backoff drew from
+`uniform(0, 2^n)` — the commonly cited "full jitter". Against a hard-down service it
+produced waits of 0.6s, 1.2s, 1.1s and burned all five attempts in about five seconds.
+That is not backing off, it is hammering with extra steps: the random draw gives away the
+exponential growth it is layered on top of.
+
+Switched to **equal jitter** — `delay/2 + uniform(0, delay/2)`. Every wait is at least half
+the intended backoff so the curve still grows, while the random half still scatters jobs
+that all failed during the same outage. The measured curve above is the result.
+
+**A monitoring bug worth noting.** `make queue` read the library's default namespace while
+the services read `QUEUE_NAMESPACE` from `.env`, so it cheerfully reported an empty queue
+while jobs were retrying in a different keyspace. Monitoring that looks somewhere other
+than production is worse than no monitoring — it actively misleads.
+
+**Decisions made:**
+
+- **Classification precedence: known error code > status code > upstream hint.** The hint
+  is trusted last because it is most likely to be absent or wrong. A 404 that claims to be
+  retryable is still a 404.
+- **The worker calls the flight service directly, not the AI service.** An "execute any
+  tool" endpoint for the worker would be a hole straight through the confirmation gate
+  (ADR 0004). A retry job only ever exists for an operation the customer already
+  confirmed, so re-running it honours that consent rather than bypassing it.
+- **Redis holds work, Postgres holds history**, and mirroring is best-effort. A database
+  hiccup must never cost a job.
+- **The scheduler is a separate role** from the workers. A reaper that cannot run while
+  workers are saturated cannot recover a worker that died while saturated — which is
+  precisely when they die.
+- **Unknown job types fail permanently.** A missing handler is a deployment mistake;
+  retrying it five times only delays noticing.
+
+**Also fixed:** the Phase 1 seed stamped each job's *final* resolution onto every failure
+row, inventing a history where the system gave up five times instead of once. Intermediate
+failures now read `RETRYING`. Same class of dishonest test data as the permanent-retry bug
+fixed in Phase 1 — and the same reason it matters: this is what the dashboard will be
+built against.
+
+**Verified:** 31/31 queue tests (priority, crash recovery, backoff curve, DLQ, operator
+requeue, idempotency, scheduling, classification), 7/7 confirmation gate, plus the two live
+demos above. Retry history mirrored to Postgres with backoff, duration and worker id.
+
+**Next:** Phase 7 — the Node platform API, JWT auth and RBAC.
+
+---
 
 ### 2026-09-17 — Phase 5: Configurable flows ✅
 

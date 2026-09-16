@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(_find_root_env(), ".env"), extra="ignore")
 
     database_url: str = "postgresql://voiceops:voiceops@localhost:5432/voiceops"
+    redis_url: str = "redis://localhost:6379/0"
+    queue_namespace: str = "vo"
     ai_port: int = 8000
     log_level: str = "info"
 
@@ -53,6 +55,8 @@ class Settings(BaseSettings):
     # keeps requesting tools loops until something else times out.
     max_tool_iterations: int = 5
     llm_timeout_sec: float = 120.0
+    # Attempt cap for work queued when a confirmed operation fails mid-call.
+    max_attempts: int = 5
 
 
 settings = Settings()

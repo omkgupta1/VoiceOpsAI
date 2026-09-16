@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
+from app.core.queue import enqueue_retry
 from app.flows.loader import get_flow
 from app.orchestrator.prompt import SYSTEM_PROMPT
 from app.providers.base import LLMProvider, Message, ProviderError
@@ -85,6 +86,8 @@ class TurnResult:
     informed_bookings: set[str] = field(default_factory=set)
     # True when this turn was spent asking for confirmation rather than acting.
     awaiting_confirmation: bool = False
+    # Operations that failed transiently and were handed to the queue to finish.
+    queued_jobs: list[dict[str, Any]] = field(default_factory=list)
     # Where the conversation sits in its flow, carried to the next turn.
     flow_id: str = ""
     flow_state: str = ""
@@ -122,6 +125,7 @@ async def run_turn(
     informed_bookings: set[str] | None = None,
     flow_id: str | None = None,
     flow_state: str | None = None,
+    call_id: str | None = None,
 ) -> TurnResult:
     started = time.perf_counter()
 
@@ -139,6 +143,7 @@ async def run_turn(
     invocations: list[ToolInvocation] = []
     llm_ms = tools_ms = iterations = 0
     awaiting_confirmation = False
+    queued_jobs: list[dict[str, Any]] = []
     informed: set[str] = set(informed_bookings or ())
     # Tools that actually executed this turn, as opposed to ones that were blocked.
     executed_this_turn = 0
@@ -224,6 +229,46 @@ async def run_turn(
 
             executed_this_turn += 1
 
+            # A confirmed change that failed for a transient reason is handed to
+            # the queue rather than lost. The customer already said yes; the
+            # flight service being briefly unreachable is not their problem, and
+            # asking them to call back and repeat an instruction they have
+            # already given is the failure the queue exists to prevent.
+            if tool is not None and tool.mutating and not result.ok and result.retryable:
+                queued = await enqueue_retry(
+                    tool=call.name, arguments=call.arguments, call_id=call_id,
+                    error=result.error_message or result.error_code or "unknown",
+                )
+                if queued is not None:
+                    queued_jobs.append({"job_id": queued.id, "tool": call.name})
+                    # Tell the model what actually happened, so it can tell the
+                    # customer the truth: the request is in hand, not lost.
+                    messages.append(
+                        Message(
+                            role="tool",
+                            content=(
+                                "QUEUED_FOR_RETRY: the service is temporarily unavailable, "
+                                "so this request has been queued and will be completed "
+                                "automatically. Reassure the customer that it is in hand "
+                                "and that they do not need to call back. Do not call this "
+                                "tool again."
+                            ),
+                            tool_call_id=call.id,
+                            name=call.name,
+                        )
+                    )
+                    invocations.append(
+                        ToolInvocation(
+                            name=call.name, arguments=call.arguments, ok=False,
+                            duration_ms=result.duration_ms,
+                            error_code="QUEUED_FOR_RETRY",
+                            error_message=result.error_message,
+                        )
+                    )
+                    # Consent was given and is now owned by the job.
+                    informed.discard(str(call.arguments.get("pnr", "")).upper())
+                    continue
+
             # A successful lookup is what makes a later change confirmable.
             if result.ok and call.name in _SURFACING_TOOLS:
                 if pnr_value := str(call.arguments.get("pnr", "")).upper():
@@ -295,6 +340,7 @@ async def run_turn(
         truncated=truncated,
         informed_bookings=informed,
         awaiting_confirmation=awaiting_confirmation,
+        queued_jobs=queued_jobs,
         flow_id=flow.id,
         flow_state=current_state,
     )

@@ -16,10 +16,12 @@ S ?= flaky
 RUNS ?= 1
 MODE ?= scoped
 AI_DIR := services/ai
+WORKER_DIR := services/worker
+QUEUE_DIR := packages/queue-py
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
         migrate migrate-status seed db-reset chaos chaos-status chaos-off \
-        ai eval test-gate test-voice
+        ai eval test-gate test-voice worker queue test-queue
 
 help: ## Show this help
 	@echo ""
@@ -107,6 +109,15 @@ test-gate: ## Verify the confirmation gate still blocks unconfirmed booking chan
 
 test-voice: ## Speak questions at the agent and check it hears and acts on them
 	@cd $(AI_DIR) && uv run python test_voice_loop.py
+
+worker: ## Run the queue workers and scheduler
+	@cd $(WORKER_DIR) && uv run python -m app.main
+
+queue: ## Show queue depth, counters and dead letters (make queue W=1 to watch)
+	@cd $(QUEUE_DIR) && uv run --quiet python ../../scripts/queue_status.py $(if $(W),--watch,)
+
+test-queue: ## Verify priority, crash recovery, backoff, DLQ and idempotency
+	@cd $(QUEUE_DIR) && uv run python test_queue.py
 
 
 psql: ## Open a psql shell against the local database

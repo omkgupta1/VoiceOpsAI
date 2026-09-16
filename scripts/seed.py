@@ -381,9 +381,16 @@ def seed(conn: psycopg.Connection) -> dict[str, int]:
                     """,
                     (
                         job_id, service, error_class, etype, emsg, attempt,
-                        "RESOLVED" if status == "SUCCESS" else
-                        "DEAD_LETTER" if status == "DEAD_LETTER" else
-                        "RETRYING" if status == "RETRY_WAIT" else "OPEN",
+                        # Only the last attempt carries the job's terminal
+                        # resolution. Earlier ones were still retrying when they
+                        # happened, and stamping the final status onto all of
+                        # them invents a history where the system gave up five
+                        # times instead of once.
+                        (
+                            "RESOLVED" if status == "SUCCESS" else
+                            "DEAD_LETTER" if status == "DEAD_LETTER" else
+                            "RETRYING" if status == "RETRY_WAIT" else "OPEN"
+                        ) if final else "RETRYING",
                         '{"source":"seed"}', started_at,
                     ),
                 )

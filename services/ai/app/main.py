@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import app.tools.flight  # noqa: F401
 from app.api.routes import router
 from app.config import settings
-from app.core import persistence
+from app.core import persistence, queue
 from app.flows.loader import load_flows
 from app.providers.registry import active
 from app.tools.base import registry
@@ -51,7 +51,9 @@ def _validate_flows() -> None:
 async def lifespan(app: FastAPI):
     _validate_flows()
     await persistence.open_pool()
+    await queue.open_client()
     yield
+    await queue.close_client()
     await persistence.close_pool()
 
 

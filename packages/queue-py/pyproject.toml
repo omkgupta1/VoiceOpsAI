@@ -1,0 +1,16 @@
+[project]
+name = "voiceops-queue"
+version = "0.1.0"
+description = "Redis-backed priority queue with scheduling, retries and crash recovery"
+requires-python = ">=3.12"
+dependencies = ["redis>=5.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["voiceops_queue"]
+
+[tool.ruff]
+line-length = 100
