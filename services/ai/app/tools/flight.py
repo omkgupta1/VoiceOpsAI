@@ -323,3 +323,69 @@ registry.register(Tool(
     },
     handler=escalate_to_human,
 ))
+
+
+# ---------- Live external data ----------
+#
+# These reach genuinely outside the system: real weather observations and real
+# aircraft transponder positions. Both are proxied through the flight service so
+# the caching and rate-limit handling live in one place.
+#
+# They fail for reasons nobody here controls, which makes them the most honest
+# retry material in the project — a chaos scenario is a simulation of this.
+
+_EXPECTED_KEYS["weather"] = {"airport", "temperature_c"}
+_EXPECTED_KEYS["aircraft"] = {"flight_number", "airborne"}
+
+
+async def check_airport_weather(airport_code: str) -> ToolResult:
+    code = _normalise_identifier(airport_code)
+    return await _call("GET", f"/v1/live/weather/{code}", shape="weather")
+
+
+async def check_aircraft_position(flight_number: str) -> ToolResult:
+    number = _normalise_identifier(flight_number)
+    return await _call("GET", f"/v1/live/aircraft/{number}", shape="aircraft")
+
+
+registry.register(Tool(
+    name="check_airport_weather",
+    description=(
+        "Get the current weather at an airport, using its three-letter code like DEL "
+        "or BOM. Call this when the customer asks about weather, or whether weather "
+        "might delay or has delayed a flight. Returns temperature, wind, visibility "
+        "and whether conditions are likely to cause delays."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "airport_code": {
+                "type": "string",
+                "description": "The three-letter airport code, e.g. DEL for Delhi",
+            }
+        },
+        "required": ["airport_code"],
+    },
+    handler=check_airport_weather,
+))
+
+registry.register(Tool(
+    name="check_aircraft_position",
+    description=(
+        "Find out where an aircraft is right now — whether it is in the air, its "
+        "altitude and speed. Call this when the customer asks where their plane is, "
+        "whether it has taken off, or whether it is still flying. This is live "
+        "position data, not the schedule; use check_flight_status for delays."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "flight_number": {
+                "type": "string",
+                "description": "The flight number, e.g. AI302 or 6E455",
+            }
+        },
+        "required": ["flight_number"],
+    },
+    handler=check_aircraft_position,
+))

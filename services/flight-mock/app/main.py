@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from app.chaos import ChaosMiddleware
 from app.config import settings
 from app.db import close_pool, fetch_one, open_pool
-from app.routers import admin, bookings, flights, refunds
+from app.routers import admin, bookings, flights, live, refunds
 
 
 @asynccontextmanager
@@ -85,6 +85,7 @@ async def health() -> dict:
 app.include_router(flights.router)
 app.include_router(bookings.router)
 app.include_router(refunds.router)
+app.include_router(live.router)
 app.include_router(admin.router)
 
 

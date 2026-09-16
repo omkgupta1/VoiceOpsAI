@@ -40,3 +40,4 @@ build/
 tmp/
 *.log
 audio-out/
+data/reference/

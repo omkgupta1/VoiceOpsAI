@@ -36,13 +36,16 @@ random.seed(42)
 NOW = datetime.now(timezone.utc)
 SEED_PASSWORD = "voiceops123"
 
+# Reference tables (airports, airlines, routes) are deliberately absent: they
+# hold real data loaded by `make reference` and must survive a reseed.
 TABLES = [
     "job_attempts", "failures", "jobs", "conversations", "calls",
     "support_tickets", "refunds", "bookings", "flights", "customers", "users",
 ]
 
-AIRPORTS = ["DEL", "BOM", "BLR", "MAA", "CCU", "HYD", "GOI", "PNQ", "AMD", "COK"]
-AIRLINES = [("AI", "Air India"), ("6E", "IndiGo"), ("UK", "Vistara"), ("SG", "SpiceJet")]
+# The network the seeded schedule flies. Real airports; the routes between them
+# are whatever the carriers actually operated.
+HUBS = ("DEL", "BOM", "BLR", "MAA", "CCU", "HYD", "GOI", "PNQ", "AMD", "COK")
 
 CUSTOMERS = [
     ("Ananya Sharma", "+919812345001", "ananya.sharma@example.com", "GOLD"),
@@ -114,6 +117,36 @@ def pnr() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
+def load_routes(conn: psycopg.Connection) -> list[tuple[str, str, str, str]]:
+    """
+    Real (carrier, name, origin, destination) tuples between the hub airports.
+
+    Flights are built from these rather than by pairing random airport codes, so
+    a seeded AI303 flies a route Air India genuinely operated. Requires
+    `make reference` to have run.
+    """
+    rows = conn.execute(
+        """
+        SELECT r.airline_iata, a.name, r.origin, r.destination
+          FROM routes r
+          JOIN airlines a ON a.iata = r.airline_iata
+         WHERE r.origin = ANY(%s) AND r.destination = ANY(%s)
+           AND a.country = 'India'
+         ORDER BY r.airline_iata, r.origin, r.destination
+        """,
+        (list(HUBS), list(HUBS)),
+    ).fetchall()
+
+    if not rows:
+        sys.exit(
+            "No routes found — run `make reference` first to load real airport "
+            "and airline data from OpenFlights."
+        )
+    # This connection has no dict row factory, so rows arrive as plain tuples
+    # in the order selected: (airline_iata, name, origin, destination).
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
+
+
 def seed(conn: psycopg.Connection) -> dict[str, int]:
     counts: dict[str, int] = {}
 
@@ -143,12 +176,13 @@ def seed(conn: psycopg.Connection) -> dict[str, int]:
     counts["customers"] = len(customer_ids)
 
     # ---------- flights ----------
-    # Spread across the past two days and the next five, with a realistic mix of
-    # on-time, delayed and cancelled so status queries have variety to work with.
+    # Built on real routes, spread across the past two days and the next five,
+    # with a realistic mix of on-time, delayed and cancelled so status queries
+    # have variety to work with.
+    route_pool = load_routes(conn)
     flights: list[tuple] = []
     for i in range(40):
-        code, airline = random.choice(AIRLINES)
-        origin, destination = random.sample(AIRPORTS, 2)
+        code, airline, origin, destination = random.choice(route_pool)
         departure = NOW + timedelta(days=random.randint(-2, 5), hours=random.randint(0, 23))
         duration = timedelta(minutes=random.randint(75, 210))
 

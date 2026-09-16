@@ -52,6 +52,12 @@ CASES: list[tuple[str, str, str, str | None]] = [
     ("identify",  "human request",    "Just put me through to a real person please",          "escalate_to_human"),
     ("identify",  "human request 2",  "I'd like to speak to a manager",                       "escalate_to_human"),
     ("identify",  "human request 3",  "Can I talk to a human agent?",                         "escalate_to_human"),
+    # Live external data. These share the state with the schedule lookup, so they
+    # also test whether the model can tell "is it delayed" from "where is it".
+    ("identify",  "weather",          "What's the weather like in Delhi right now?",          "check_airport_weather"),
+    ("identify",  "weather delay",    "Is the weather at BOM going to delay flights?",        "check_airport_weather"),
+    ("identify",  "where is plane",   "Where is flight AI302 right now?",                     "check_aircraft_position"),
+    ("identify",  "has it taken off", "Has flight AI302 taken off yet?",                      "check_aircraft_position"),
     ("identify",  "chitchat",         "Hello, are you a robot?",                              None),
     ("identify",  "no reference",     "I want to cancel my flight",                           None),
 

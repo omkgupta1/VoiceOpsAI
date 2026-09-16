@@ -11,7 +11,7 @@
 |---|---|
 | **Phase** | 8 — Servicing dashboard ✅ complete |
 | **Next** | Phase 9 — Observability (OpenTelemetry, Prometheus, Grafana, Jaeger) |
-| **What runs today** | The whole platform, usable from a browser behind a login |
+| **What runs today** | The whole platform, on real airports, real weather and real aircraft |
 
 ### How to start everything
 
@@ -38,8 +38,9 @@ curl -s localhost:8000/v1/turn -H 'content-type: application/json' \
 against offering every tool), `make test-gate` checks the confirmation gate, and
 `make test-voice` speaks questions at the agent end to end.
 
-`make web` runs the dashboard, `make api` the platform API, and `make test-rbac`
-checks the permission matrix.
+`make reference` loads real airport/airline/route data from OpenFlights (needed
+before `make seed`). `make web` runs the dashboard, `make api` the platform API,
+and `make test-rbac` checks the permission matrix.
 `make worker` runs the queue workers and scheduler (its own terminal), `make queue`
 shows depth and dead letters (`W=1` to watch live), and `make test-queue` checks
 priority, crash recovery, backoff, dead-lettering and idempotency. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
@@ -82,6 +83,81 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-17 — Real data: OpenFlights, NOAA and OpenSky ✅
+
+**Added:** real airports, airlines and routes in the database, plus two tools that reach
+genuinely outside the system — live weather and live aircraft positions. No API keys, no
+signups. Details in [docs/real-data.md](docs/real-data.md).
+
+| Source | Loaded |
+|---|---|
+| OpenFlights | 6,072 airports, 833 airlines, 63,873 routes |
+| NOAA Aviation Weather | live METAR per airport |
+| OpenSky Network | live ADS-B aircraft positions |
+
+All 40 seeded flights now fly a route their carrier actually operated — verified by
+joining `flights` against the real `routes` table. `DEL` is Indira Gandhi International in
+Delhi rather than a string that merely looks like an airport.
+
+Real answers from the running agent:
+
+> *"The current weather at Delhi airport is 27 degrees Celsius with poor visibility, around
+> 2.17 kilometres. There's a chance of thunderstorms and low clouds, which are likely to
+> cause delays."*
+
+> *"Flight AI302 is currently airborne… at an altitude of 37,000 feet, moving at 918 km/h."*
+
+**What stays simulated, and why.** Bookings, cancellations and refunds cannot be real — no
+public API exposes passenger records, and that is also the only safe option. Only the
+read-only flight information became real.
+
+---
+
+**The finding worth keeping.** Adding the two tools moved the eval **79% → 92%**, but
+unevenly:
+
+| State | Before | With both added | After removing from `servicing` |
+|---|---|---|---|
+| `identify` | 3 tools | **5 tools — all 15 cases pass** | 5 tools, unchanged |
+| `servicing` | 6 tools | 8 tools — *"yes, cancel it"* resolved to `get_booking` ✗ | 6 tools, fixed |
+
+The same two tools **improved one state and broke another**. That refines the Phase 3
+conclusion: the cost is not tool *count*, it is how **distinguishable** the options are.
+Weather, position, schedule and booking lookup are four obviously different questions, so
+`identify` absorbed them and even got better — two escalation cases that had been failing
+since Phase 3 now pass. `servicing` was already crowded with overlapping booking
+operations, and two more blurred it past the point of choosing correctly.
+
+They now live only in `identify`, where they are opening questions anyway.
+
+**Decisions made:**
+
+- **Both sources are proxied through the flight service**, not called from the AI service.
+  Caching lives in one place, the AI service keeps a single downstream instead of learning
+  about the internet, and the chaos engine can still break them — verified, `hard_down`
+  returns 503 from the weather endpoint.
+- **Caching is not optional.** OpenSky rate-limits anonymous callers to a few hundred
+  requests a day; one bounding-box query over India is cached 30s and serves every flight
+  lookup in that window. METAR is cached 10 minutes, which costs nothing since it changes
+  hourly.
+- **`airlines.icao` is the bridge that makes live tracking possible.** A ticket says
+  `AI302`; the aircraft broadcasts `AIC302`. Without the real code mapping there is no way
+  from one to the other — and likewise `DEL` → `VIDP` for weather.
+- **Reference tables survive a reseed.** `airports`, `airlines` and `routes` are
+  deliberately excluded from the seed's TRUNCATE list: they hold real data that took a
+  download to get.
+- **The routes file is a 2014 snapshot**, stated in the loader rather than left to be
+  discovered. Vistara has no domestic routes in it because it barely existed then.
+
+**Known rough edge:** the agent reads coordinates aloud as "16.6947 latitude and 91.3038
+longitude", which is not how anyone speaks. It should say "about 200 km south-east of
+Kolkata". That needs reverse geocoding against the airports table.
+
+**Verified:** 7/7 confirmation gate, 31/31 queue, 49/49 RBAC, eval 92%, and live data
+flowing end to end through the dashboard.
+
+---
 
 ### 2026-09-17 — Phase 8: Servicing dashboard ✅
 

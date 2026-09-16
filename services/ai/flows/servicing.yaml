@@ -15,10 +15,14 @@ states:
 
   identify:
     purpose: Find out what the customer needs and which booking or flight they mean.
-    # Three tools, not seven. This is the state most calls start and end in,
-    # and the one where selection accuracy matters most.
+    # Five tools, not nine. This is the state most calls start and end in, so it
+    # is where selection accuracy matters most — the live weather and position
+    # tools are here because "is my flight delayed by weather" and "has my plane
+    # taken off" are opening questions, not follow-ups.
     tools:
       - check_flight_status
+      - check_airport_weather
+      - check_aircraft_position
       - get_booking
       - escalate_to_human
     transitions:
@@ -35,6 +39,16 @@ states:
         to: identify
 
   servicing:
+    # The live weather and position tools are deliberately NOT offered here,
+    # although they are in `identify`. Measured: adding them took this state from
+    # 6 tools to 8 and selection collapsed — "yes, cancel it" started resolving
+    # to get_booking. The same two tools *improved* `identify`, where they are
+    # semantically distinct from everything else on offer.
+    #
+    # So the cost is not tool count but how distinguishable the options are. This
+    # state is already crowded with overlapping booking operations; two more
+    # blurred it. They remain reachable — a customer asking about weather here
+    # gets answered on the next turn from `identify`.
     purpose: The booking is known. Act on it, confirming before anything irreversible.
     tools:
       - get_booking
@@ -76,6 +90,7 @@ states:
       - get_booking
       - check_flight_status
       - check_refund_status
+      - check_airport_weather
       - escalate_to_human
     transitions:
       - tool: escalate_to_human

@@ -24,7 +24,7 @@ WEB_DIR := services/web
 NODE_ENV_SETUP := export PATH="$$HOME/.local/share/fnm/aliases/default/bin:$$PATH"
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
-        migrate migrate-status seed db-reset chaos chaos-status chaos-off \
+        migrate migrate-status seed reference db-reset chaos chaos-status chaos-off \
         ai eval test-gate test-voice worker queue test-queue api test-rbac web
 
 help: ## Show this help
@@ -76,7 +76,10 @@ migrate: ## Apply pending database migrations
 migrate-status: ## Show which migrations are applied vs pending
 	@uv run scripts/migrate.py status
 
-seed: ## Load realistic sample data into the database
+reference: ## Load real airports, airlines and routes from OpenFlights (cached)
+	@uv run scripts/load_reference.py $(if $(REFRESH),--refresh,)
+
+seed: ## Load sample calls, bookings and jobs (needs `make reference` first)
 	@uv run scripts/seed.py
 
 db-reset: ## Drop everything and rebuild: migrate + seed from scratch
@@ -84,6 +87,7 @@ db-reset: ## Drop everything and rebuild: migrate + seed from scratch
 	@$(COMPOSE) exec -T postgres psql -q -U $${POSTGRES_USER:-voiceops} -d $${POSTGRES_DB:-voiceops} \
 	  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 	@$(MAKE) migrate
+	@$(MAKE) reference
 	@$(MAKE) seed
 
 
