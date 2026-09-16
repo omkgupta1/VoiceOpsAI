@@ -23,12 +23,33 @@ import app.tools.flight  # noqa: F401
 from app.api.routes import router
 from app.config import settings
 from app.core import persistence
+from app.flows.loader import load_flows
 from app.providers.registry import active
 from app.tools.base import registry
 
 
+def _validate_flows() -> None:
+    """
+    Every tool a flow names must actually be registered.
+
+    Checked at startup, because a typo would otherwise present as a state whose
+    tools silently do not appear — the agent would simply refuse to do something
+    the flow says it can, with nothing in the logs to explain why.
+    """
+    known = set(registry.tools)
+    for flow in load_flows().values():
+        for name, state in flow.states.items():
+            unknown = [tool for tool in state.tools if tool not in known]
+            if unknown:
+                raise ValueError(
+                    f"flow '{flow.id}' state '{name}' names unregistered "
+                    f"tool(s): {', '.join(unknown)}"
+                )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_flows()
     await persistence.open_pool()
     yield
     await persistence.close_pool()
@@ -73,6 +94,7 @@ async def health() -> dict:
         "database": database,
         "providers": active(),
         "tools": sorted(registry.tools),
+        "flows": {fid: sorted(flow.states) for fid, flow in load_flows().items()},
     }
 
 

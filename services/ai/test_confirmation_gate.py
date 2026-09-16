@@ -112,7 +112,7 @@ async def main() -> int:
     # Rescheduling is equally irreversible and equally gated.
     result = await run_turn(
         "move it to the later flight",
-        llm=ScriptedLLM([call("reschedule_booking", pnr="ABC123", flight_id="f1")], "Moved."),
+        llm=ScriptedLLM([call("reschedule_booking", pnr="ABC123", flight_number="SG584")], "Moved."),
     )
     check("reschedule is gated too", "reschedule_booking" in blocked(result))
 

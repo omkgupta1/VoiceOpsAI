@@ -140,10 +140,49 @@ async def get_reschedule_options(pnr: str) -> ToolResult:
     )
 
 
-async def reschedule_booking(pnr: str, flight_id: str) -> ToolResult:
+async def reschedule_booking(pnr: str, flight_number: str) -> ToolResult:
+    """
+    Move a booking to another flight, identified the way the conversation does.
+
+    The API wants an opaque flight id, but the agent reads *flight numbers* out
+    loud — "SG584 departs at eight forty-five" — so that is what the model has in
+    hand when the customer says "the first one". Asking it for an id it never
+    spoke is asking it to fail, and it did: the first live reschedule passed
+    "SG584" as the id and crashed the flight service.
+
+    So the tool takes the flight number and resolves it, re-fetching the options
+    to find the matching id. One extra call, one fewer way to be wrong.
+    """
+    booking = _normalise_identifier(pnr)
+    wanted = _normalise_identifier(flight_number)
+
+    options = await _call(
+        "GET", f"/v1/bookings/{booking}/reschedule-options", shape="options"
+    )
+    if not options.ok:
+        return options
+
+    match = next(
+        (
+            option
+            for option in options.data.get("options", [])
+            if _normalise_identifier(option.get("flight_number", "")) == wanted
+        ),
+        None,
+    )
+    if match is None:
+        available = ", ".join(
+            o.get("flight_number", "?") for o in options.data.get("options", [])
+        )
+        return ToolResult.failure(
+            "FLIGHT_NOT_AN_OPTION",
+            f"{flight_number} is not one of the alternatives for {booking}. "
+            f"Available: {available or 'none'}",
+        )
+
     return await _call(
-        "POST", f"/v1/bookings/{_normalise_identifier(pnr)}/reschedule", shape="reschedule",
-        json_body={"flight_id": flight_id},
+        "POST", f"/v1/bookings/{booking}/reschedule", shape="reschedule",
+        json_body={"flight_id": match["flight_id"]},
     )
 
 
@@ -237,12 +276,12 @@ registry.register(Tool(
         "type": "object",
         "properties": {
             "pnr": _PNR,
-            "flight_id": {
+            "flight_number": {
                 "type": "string",
-                "description": "The flight_id of the chosen option from get_reschedule_options",
+                "description": "The flight number the customer chose, e.g. SG584",
             },
         },
-        "required": ["pnr", "flight_id"],
+        "required": ["pnr", "flight_number"],
     },
     handler=reschedule_booking,
     mutating=True,

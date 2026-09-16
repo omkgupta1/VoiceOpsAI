@@ -60,6 +60,14 @@ def not_reschedulable(reason: str) -> ServiceError:
     return ServiceError(422, "NOT_RESCHEDULABLE", reason, False)
 
 
+def invalid_identifier(field: str, value: str) -> ServiceError:
+    return ServiceError(
+        422, "INVALID_IDENTIFIER",
+        f"{field} must be a flight id from reschedule-options, not '{value}'",
+        False,
+    )
+
+
 def no_alternatives(pnr: str) -> ServiceError:
     return ServiceError(422, "NO_ALTERNATIVES", f"No alternative flights for booking {pnr}", False)
 

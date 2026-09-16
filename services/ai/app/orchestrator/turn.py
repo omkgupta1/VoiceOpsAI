@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
+from app.flows.loader import get_flow
 from app.orchestrator.prompt import SYSTEM_PROMPT
 from app.providers.base import LLMProvider, Message, ProviderError
 from app.tools.base import ToolResult, registry
@@ -84,6 +85,9 @@ class TurnResult:
     informed_bookings: set[str] = field(default_factory=set)
     # True when this turn was spent asking for confirmation rather than acting.
     awaiting_confirmation: bool = False
+    # Where the conversation sits in its flow, carried to the next turn.
+    flow_id: str = ""
+    flow_state: str = ""
 
 
 # Said to the customer when the model produced no usable text. Better a plain
@@ -116,14 +120,22 @@ async def run_turn(
     llm: LLMProvider,
     history: list[Message] | None = None,
     informed_bookings: set[str] | None = None,
+    flow_id: str | None = None,
+    flow_state: str | None = None,
 ) -> TurnResult:
     started = time.perf_counter()
 
+    flow = get_flow(flow_id)
+    current_state = flow_state if flow_state in flow.states else flow.initial
+
+    # A state's `purpose` is documentation for whoever reads the YAML. It is
+    # deliberately NOT appended to the system prompt: adding that one line cost
+    # 28% of tool-selection accuracy with all tools offered, and 12% when
+    # scoped, on the same eval suite. The narrowed tool list already tells the
+    # model what it may do here, and it tells it far more cheaply than prose.
     messages: list[Message] = [Message(role="system", content=SYSTEM_PROMPT)]
     messages.extend(history or [])
     messages.append(Message(role="user", content=user_message))
-
-    specs = registry.specs()
     invocations: list[ToolInvocation] = []
     llm_ms = tools_ms = iterations = 0
     awaiting_confirmation = False
@@ -140,7 +152,11 @@ async def run_turn(
         # "stop calling tools" is unreliable; removing them is not.
         offer_tools = iteration < settings.max_tool_iterations
 
-        response = await llm.complete(messages, specs if offer_tools else None)
+        # Recomputed each pass: a tool call can move the conversation to a new
+        # state, and the next choice must be made from that state's tools.
+        specs = registry.specs(flow.state(current_state).tools) if offer_tools else None
+
+        response = await llm.complete(messages, specs)
         llm_ms += response.duration_ms
         provider, model = response.provider, response.model
 
@@ -219,6 +235,11 @@ async def run_turn(
                 informed.discard(str(call.arguments.get("pnr", "")).upper())
                 awaiting_confirmation = False
 
+            # Advance the flow on what actually happened, not on what was asked
+            # for. A failed lookup must not open up tools that assume it worked.
+            if (moved := flow.next_state(current_state, call.name, result.ok)) is not None:
+                current_state = moved
+
             tools_ms += result.duration_ms
             invocations.append(
                 ToolInvocation(
@@ -274,4 +295,6 @@ async def run_turn(
         truncated=truncated,
         informed_bookings=informed,
         awaiting_confirmation=awaiting_confirmation,
+        flow_id=flow.id,
+        flow_state=current_state,
     )

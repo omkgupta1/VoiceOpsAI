@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 4 — Voice in and out ✅ complete |
-| **Next** | Phase 5 — Configurable voice-bot flows |
-| **What runs today** | A working voice agent: speak into the browser, hear a grounded answer |
+| **Phase** | 5 — Configurable flows ✅ complete |
+| **Next** | Phase 6 — Redis priority queue, scheduler and retry engine |
+| **What runs today** | A voice agent that services bookings through a configurable flow |
 
 ### How to start everything
 
@@ -34,8 +34,9 @@ curl -s localhost:8000/v1/turn -H 'content-type: application/json' \
   -d '{"message":"is flight AI858 delayed?"}' | python3 -m json.tool
 ```
 
-`make eval RUNS=3` measures tool-selection accuracy, `make test-gate` checks the
-confirmation gate, and `make test-voice` speaks questions at the agent end to end. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
+`make eval RUNS=3` measures tool selection (`MODE=compare` contrasts flow-scoped
+against offering every tool), `make test-gate` checks the confirmation gate, and
+`make test-voice` speaks questions at the agent end to end. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
 want a clean slate. Seeded dashboard logins are `admin@voiceops.ai`,
 `supervisor@voiceops.ai`, `agent1@voiceops.ai`, `agent2@voiceops.ai`, all with
 password `voiceops123`.
@@ -71,6 +72,92 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 5: Configurable flows ✅
+
+**Built:** a soft state machine over the conversation. States are YAML in
+[services/ai/flows/](services/ai/flows/); each declares which tools are reachable from it.
+The model still drives the dialogue in its own words, but can only act within the current
+state. Full notes in [docs/flows.md](docs/flows.md).
+
+```
+identify ──get_booking──► servicing ──get_reschedule_options──► choosing_flight
+ (3 tools)                (6 tools)                              (4 tools)
+                              └──cancel_booking──► resolved ◄──reschedule_booking──┘
+```
+
+**The measurement this phase existed to settle.** Phase 3 predicted that narrowing the
+tool set per state would fix the 7B degradation that prompt wording could not. On the same
+16-case suite, 3 runs each:
+
+| | accuracy |
+|---|---|
+| All tools at once | 73% |
+| **Flow-scoped** | **81%** |
+
+**+8% from scoping.** The prediction held.
+
+---
+
+**The finding that nearly buried it.** My first implementation also appended each state's
+one-line `purpose` to the system prompt — apparently free context. Measured together,
+scoping looked like it *hurt* (78% → 75%). Isolating the two variables:
+
+| | no state line | + state line |
+|---|---|---|
+| all 7 tools | 75% | **47%** |
+| flow-scoped | **81%** | 69% |
+
+One well-meant sentence cost **28 points** unscoped and 12 scoped — more damage than the
+scoping was repairing. `purpose` is now documentation for humans and never reaches the
+model ([ADR 0005](docs/decisions/0005-flow-purpose-not-in-prompt.md)). The real lesson is
+methodological: I changed two things at once and the combined number pointed the wrong
+way. `make eval MODE=compare` now makes the isolation one command.
+
+---
+
+**A 500 that would have poisoned the retry engine.** The first live reschedule crashed the
+flight service: the model passed `flight_id="SG584"` — the flight *number* it had just
+read aloud — and an unhandled `psycopg` UUID error surfaced as HTTP 500. My classifier
+marks 500 retryable, so Phase 6's retry engine would have retried, with backoff, a request
+that could never succeed. That is the exact failure mode this project exists to prevent,
+and it was sitting one phase ahead of the code that would have triggered it.
+
+Fixed on both sides:
+- The flight service validates the identifier and returns `422 INVALID_IDENTIFIER`,
+  correctly classified **permanent**. A malformed request is a client error, never a
+  server one.
+- `reschedule_booking` now takes a **flight number** rather than an opaque id, resolving
+  it internally against the options. The agent reads flight numbers aloud, so that is what
+  the model has in hand when the customer says "the first one". Asking it for an id it
+  never spoke was asking it to fail.
+
+**Decisions made:**
+
+- **Flow definitions are validated three ways at startup** — undefined target states,
+  transitions on tools the state does not offer, and tool names absent from the registry.
+  Each would otherwise present as a conversation that silently dead-ends.
+- **Transitions fire on what happened, not what was asked for.** A failed lookup stays in
+  `identify`, so servicing tools never become reachable for a booking that was not found.
+- **Flow position lives on the `calls` row**, so a conversation resumes across restarts and
+  the Phase 8 dashboard can show where any call sits.
+
+**Known limitation:** `escalate_to_human` is still missed about a third of the time for
+indirect phrasings ("I'd like to speak to a manager" → "Sure, I'll transfer you" with no
+tool call, so the escalation is never recorded). This persists at every tool count tested,
+so it is a model ceiling rather than a flow bug. `LLM_PROVIDER=groq` puts a 70B model
+behind the same code — which is what the provider interface is for.
+
+**Verified:**
+- Full reschedule conversation walks `identify → servicing → choosing_flight → resolved`
+  and the booking ends `RESCHEDULED`
+- Flow position persisted to Postgres and resumed across turns
+- 7/7 confirmation gate, 4/4 voice loop, 19/19 doctor, eval 81%
+
+**Next:** Phase 6 — the Redis priority queue, scheduler and retry engine. The heart of the
+project, and the chaos engine from Phase 2 is what will prove it works.
+
+---
 
 ### 2026-09-17 — Phase 4: Voice in and out ✅
 

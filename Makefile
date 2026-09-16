@@ -14,6 +14,7 @@ FLIGHT_MOCK_PORT ?= 8002
 AI_PORT ?= 8000
 S ?= flaky
 RUNS ?= 1
+MODE ?= scoped
 AI_DIR := services/ai
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
@@ -98,8 +99,8 @@ chaos-off: ## Turn chaos off and restore healthy behaviour
 ai: ## Run the AI service (natively — it shells out to whisper.cpp and piper)
 	@cd $(AI_DIR) && uv run uvicorn app.main:app --host 0.0.0.0 --port $(AI_PORT) --reload
 
-eval: ## Measure tool-selection accuracy (make eval RUNS=3 for a stabler number)
-	@cd $(AI_DIR) && uv run python eval_tools.py --runs $(RUNS)
+eval: ## Measure tool selection (RUNS=3 to stabilise, MODE=compare vs unscoped)
+	@cd $(AI_DIR) && uv run python eval_tools.py --runs $(RUNS) --mode $(MODE)
 
 test-gate: ## Verify the confirmation gate still blocks unconfirmed booking changes
 	@cd $(AI_DIR) && uv run python test_confirmation_gate.py

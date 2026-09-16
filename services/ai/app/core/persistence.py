@@ -175,6 +175,32 @@ async def set_informed_bookings(call_id: str, informed: set[str]) -> None:
         )
 
 
+async def get_flow_position(call_id: str) -> tuple[str | None, str | None]:
+    """Which flow this call is in, and where in it. Stored on the call row."""
+    async with _connection() as conn:
+        row = await (
+            await conn.execute(
+                "SELECT flow_id, metadata ->> 'flow_state' AS flow_state FROM calls WHERE id = %s",
+                (call_id,),
+            )
+        ).fetchone()
+    return ((row or {}).get("flow_id"), (row or {}).get("flow_state"))
+
+
+async def set_flow_position(call_id: str, flow_id: str, flow_state: str) -> None:
+    async with _connection() as conn:
+        await conn.execute(
+            """
+            UPDATE calls
+               SET flow_id  = %s,
+                   metadata = jsonb_set(coalesce(metadata, '{}'::jsonb),
+                                        '{flow_state}', to_jsonb(%s::text), true)
+             WHERE id = %s
+            """,
+            (flow_id, flow_state, call_id),
+        )
+
+
 async def load_history(call_id: str, limit: int = 20) -> list[dict[str, Any]]:
     async with _connection() as conn:
         rows = await (

@@ -1,0 +1,87 @@
+# Default flight servicing conversation.
+#
+# States narrow which tools the model can reach. The customer is never forced
+# down a script — they can change topic, and the state follows what they
+# actually did rather than what the flow expected.
+#
+# Validated on load: a transition to an undefined state, or on a tool the state
+# does not offer, is a startup error rather than a dead-end mid-call.
+
+id: servicing
+description: Flight status, booking servicing, cancellation, rescheduling and refunds
+initial: identify
+
+states:
+
+  identify:
+    purpose: Find out what the customer needs and which booking or flight they mean.
+    # Three tools, not seven. This is the state most calls start and end in,
+    # and the one where selection accuracy matters most.
+    tools:
+      - check_flight_status
+      - get_booking
+      - escalate_to_human
+    transitions:
+      # A successful lookup means we now know the booking, so servicing opens up.
+      - tool: get_booking
+        to: servicing
+      - tool: escalate_to_human
+        to: escalated
+      # A failed lookup stays here: the customer needs to re-read the reference,
+      # and the servicing tools must not become reachable for a booking we could
+      # not find.
+      - tool: get_booking
+        on: failure
+        to: identify
+
+  servicing:
+    purpose: The booking is known. Act on it, confirming before anything irreversible.
+    tools:
+      - get_booking
+      - cancel_booking
+      - get_reschedule_options
+      - check_refund_status
+      - check_flight_status
+      - escalate_to_human
+    transitions:
+      - tool: get_reschedule_options
+        to: choosing_flight
+      - tool: cancel_booking
+        to: resolved
+      - tool: escalate_to_human
+        to: escalated
+
+  choosing_flight:
+    purpose: Read the alternative flights back and let the customer pick one.
+    tools:
+      - get_reschedule_options
+      - reschedule_booking
+      - get_booking
+      - escalate_to_human
+    transitions:
+      - tool: reschedule_booking
+        to: resolved
+      - tool: escalate_to_human
+        to: escalated
+      # A refused reschedule drops back to servicing, where cancelling or
+      # escalating are still available.
+      - tool: reschedule_booking
+        on: failure
+        to: servicing
+
+  resolved:
+    purpose: The change is done. Confirm it plainly and offer any further help.
+    terminal: true
+    tools:
+      - get_booking
+      - check_flight_status
+      - check_refund_status
+      - escalate_to_human
+    transitions:
+      - tool: escalate_to_human
+        to: escalated
+
+  escalated:
+    purpose: A human is taking over. Reassure the customer and stop acting.
+    terminal: true
+    tools: []

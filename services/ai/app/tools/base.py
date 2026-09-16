@@ -85,8 +85,16 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self.tools.get(name)
 
-    def specs(self) -> list[ToolSpec]:
-        return [tool.spec for tool in self.tools.values()]
+    def specs(self, names: list[str] | None = None) -> list[ToolSpec]:
+        """
+        Tool descriptions for the model, optionally narrowed to a named subset.
+
+        The flow engine uses the subset form: a small model offered two tools
+        chooses far better than the same model offered seven.
+        """
+        if names is None:
+            return [tool.spec for tool in self.tools.values()]
+        return [self.tools[name].spec for name in names if name in self.tools]
 
     async def run(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         tool = self.get(name)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import random
 import string
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter
@@ -190,6 +191,14 @@ async def reschedule_booking(pnr: str, body: RescheduleRequest) -> dict:
 
     if row["status"] != "CONFIRMED":
         raise errors.not_reschedulable(f"A booking in state {row['status']} cannot be rescheduled")
+
+    # Validate before the query. Passing a flight number here raises deep inside
+    # psycopg and surfaces as a 500 — which a retry engine reads as "transient"
+    # and retries forever, when in fact the request can never succeed.
+    try:
+        uuid.UUID(body.flight_id)
+    except ValueError:
+        raise errors.invalid_identifier("flight_id", body.flight_id) from None
 
     target = await fetch_one(
         """

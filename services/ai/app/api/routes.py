@@ -35,6 +35,7 @@ class TurnResponse(BaseModel):
     # True when the agent asked the customer to confirm a change rather than
     # making it. The Phase 8 dashboard surfaces this as a distinct call state.
     awaiting_confirmation: bool
+    flow: dict
 
 
 # Said back when the microphone produced no words. Short on purpose: it is
@@ -72,6 +73,7 @@ async def _persist(
 ) -> None:
     """Record both halves of a completed exchange and roll it up onto the call."""
     await persistence.set_informed_bookings(call_id, result.informed_bookings)
+    await persistence.set_flow_position(call_id, result.flow_id, result.flow_state)
     index = await persistence.next_turn_index(call_id)
 
     await persistence.record_turn(
@@ -101,10 +103,14 @@ async def turn(request: TurnRequest) -> TurnResponse:
 
     history = _to_messages(await persistence.load_history(call_id)) if request.call_id else []
     informed = await persistence.get_informed_bookings(call_id) if request.call_id else set()
+    flow_id, flow_state = (
+        await persistence.get_flow_position(call_id) if request.call_id else (None, None)
+    )
 
     try:
         result = await run_turn(
-            request.message, llm=get_llm(), history=history, informed_bookings=informed
+            request.message, llm=get_llm(), history=history, informed_bookings=informed,
+            flow_id=flow_id, flow_state=flow_state,
         )
     except ProviderError as exc:
         # Surfaced with its retryable flag intact so the caller — and later the
@@ -133,6 +139,7 @@ async def turn(request: TurnRequest) -> TurnResponse:
         providers=providers,
         truncated=result.truncated,
         awaiting_confirmation=result.awaiting_confirmation,
+        flow={"id": result.flow_id, "state": result.flow_state},
     )
 
 
@@ -171,6 +178,7 @@ class AudioTurnResponse(BaseModel):
     providers: dict
     truncated: bool
     awaiting_confirmation: bool
+    flow: dict
     audio: dict | None
 
 
@@ -212,16 +220,21 @@ async def audio_turn(
             timings={"stt_ms": transcript.duration_ms, "llm_ms": 0, "tts_ms": 0,
                      "tools_ms": 0, "total_ms": transcript.duration_ms},
             providers=providers, truncated=False, awaiting_confirmation=False,
+            flow={"id": "", "state": ""},
             audio=await _speak(_NOTHING_HEARD),
         )
 
     # ---- Reasoning and tools ----
     history = _to_messages(await persistence.load_history(resolved_call_id)) if call_id else []
     informed = await persistence.get_informed_bookings(resolved_call_id) if call_id else set()
+    flow_id, flow_state = (
+        await persistence.get_flow_position(resolved_call_id) if call_id else (None, None)
+    )
 
     try:
         result = await run_turn(
-            transcript.text, llm=get_llm(), history=history, informed_bookings=informed
+            transcript.text, llm=get_llm(), history=history, informed_bookings=informed,
+            flow_id=flow_id, flow_state=flow_state,
         )
     except ProviderError as exc:
         raise HTTPException(
@@ -259,6 +272,7 @@ async def audio_turn(
         providers=providers,
         truncated=result.truncated,
         awaiting_confirmation=result.awaiting_confirmation,
+        flow={"id": result.flow_id, "state": result.flow_state},
         audio=spoken,
     )
 
