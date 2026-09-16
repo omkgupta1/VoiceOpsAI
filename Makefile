@@ -10,9 +10,11 @@ WHISPER_BASE := $(MODELS_DIR)/whisper/ggml-base.en.bin
 WHISPER_SMALL := $(MODELS_DIR)/whisper/ggml-small.en.bin
 PIPER_VOICE := $(MODELS_DIR)/piper/en_US-lessac-medium.onnx
 HF := https://huggingface.co
+FLIGHT_MOCK_PORT ?= 8002
+S ?= flaky
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
-        migrate migrate-status seed db-reset
+        migrate migrate-status seed db-reset chaos chaos-status chaos-off
 
 help: ## Show this help
 	@echo ""
@@ -72,6 +74,21 @@ db-reset: ## Drop everything and rebuild: migrate + seed from scratch
 	  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 	@$(MAKE) migrate
 	@$(MAKE) seed
+
+
+chaos: ## Break the flight service: make chaos S=flaky|hard_down|slow|rate_limited|timeouts|corrupt
+	@curl -sf -X POST http://localhost:$(FLIGHT_MOCK_PORT)/admin/chaos/scenario/$(S) > /dev/null \
+	  && echo "  chaos scenario applied: $(S)" \
+	  || echo "  failed — is the flight service up? (make up)"
+
+chaos-status: ## Show the current chaos configuration and hit counters
+	@curl -sf http://localhost:$(FLIGHT_MOCK_PORT)/admin/chaos | python3 -m json.tool \
+	  || echo "  flight service is not reachable on :$(FLIGHT_MOCK_PORT)"
+
+chaos-off: ## Turn chaos off and restore healthy behaviour
+	@curl -sf -X POST http://localhost:$(FLIGHT_MOCK_PORT)/admin/chaos/reset > /dev/null \
+	  && echo "  chaos disabled" \
+	  || echo "  failed — is the flight service up? (make up)"
 
 
 psql: ## Open a psql shell against the local database

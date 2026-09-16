@@ -13,12 +13,17 @@ vision and [PROGRESS.md](PROGRESS.md) for what actually works today.
 ```bash
 make setup     # create .env from the template
 make models    # download Whisper + Piper models (~670MB)
-make up        # start Postgres, Redis and the admin UIs
+make up        # start Postgres, Redis, the flight service and the admin UIs
+make migrate   # apply the SQL schema
+make seed      # load sample data
 make doctor    # verify the whole toolchain
 ```
 
-Then open [pgweb](http://localhost:8081) and [RedisInsight](http://localhost:5540).
+Then open [the flight API docs](http://localhost:8002/docs),
+[pgweb](http://localhost:8081) and [RedisInsight](http://localhost:5540).
 `make help` lists every command.
+
+Break things on purpose with `make chaos S=flaky` — see [docs/chaos.md](docs/chaos.md).
 
 ## Prerequisites
 

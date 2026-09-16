@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 1 — Data layer ✅ complete |
-| **Next** | Phase 2 — Mock flight service + chaos engine |
-| **What runs today** | Postgres 16 (full schema + seed data) + Redis 7 + admin UIs |
+| **Phase** | 2 — Mock flight service + chaos engine ✅ complete |
+| **Next** | Phase 3 — AI service: provider interfaces + text pipeline |
+| **What runs today** | Postgres + Redis + the flight service, all in Docker Compose |
 
 ### How to start everything
 
@@ -35,6 +35,7 @@ password `voiceops123`.
 | RedisInsight | http://localhost:5540 |
 | Postgres | `localhost:5432` — `voiceops` / `voiceops` / db `voiceops` |
 | Redis | `localhost:6379` |
+| Flight service | http://localhost:8002 — [API docs](http://localhost:8002/docs) |
 | Ollama (host-native) | http://localhost:11434 |
 
 Run `make help` for every available command.
@@ -49,10 +50,81 @@ Run `make help` for every available command.
 - **16GB RAM is shared** between Docker and a ~5GB local model. If things get tight,
   switch `LLM_PROVIDER=groq` in `.env` to offload the LLM.
 - macOS ships GNU Make 3.81, which lacks `.RECIPEPREFIX` — the Makefile uses real tabs.
+- **Chaos persists until you turn it off.** If the flight service starts returning 503s
+  unexpectedly, run `make chaos-status` — you probably left a scenario applied.
 
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 2: Mock flight service + chaos engine ✅
+
+**Built:** [services/flight-mock](services/flight-mock) — a FastAPI service standing in for the
+"Flight Service APIs" that overview.md assumes but never defines. It reads the same
+PostgreSQL tables as everything else, so a cancellation here is visible platform-wide.
+
+**Endpoints:** flight status, booking lookup, cancel, reschedule-options, reschedule,
+refund status. Full list and business rules in [docs/chaos.md](docs/chaos.md).
+
+**The chaos engine** is the real deliverable. Seven named scenarios, controllable at
+runtime with no restart:
+
+| Scenario | Behaviour |
+|---|---|
+| `flaky` | 40% fail with 503 — retries that eventually succeed |
+| `hard_down` | 100% fail — attempts exhausted, dead-letter |
+| `slow` | 2500ms ± 1500ms jitter — timeouts, backpressure |
+| `rate_limited` | 429 with `Retry-After: 2` |
+| `timeouts` | Hangs, then 504 — trips the client's own read timeout |
+| `corrupt` | **HTTP 200** with a wrong-shaped body |
+
+`make chaos S=flaky`, `make chaos-status`, `make chaos-off`.
+
+**Decisions made:**
+
+- **`/health` and `/admin/*` are never chaos-injected.** If `hard_down` could break the
+  admin API, chaos would be unrecoverable without a restart — which defeats the point of
+  runtime control.
+- **Injected responses carry an `x-chaos-injected` header**, so a failure in a log can
+  always be traced to a deliberate injection rather than mistaken for a real bug.
+- **`corrupt` returns HTTP 200 with a broken body**, not a 5xx. A client checking only
+  status codes sails straight past it and fails somewhere further downstream with a
+  misleading stack trace. That is the failure mode naive clients handle worst, so it is
+  the one most worth being able to reproduce.
+- **One error envelope everywhere**: `{"error": {code, message, retryable}}`. The retry
+  engine gets exactly one shape to parse. The `retryable` flag is a convenience — Phase 6
+  must still classify from the status code alone, because real upstreams rarely tell you.
+- **Business rules that can refuse the agent.** Cancellation closes 2h before departure;
+  cross-route reschedules are rejected; a cancelled booking cannot be cancelled twice.
+  Without a backend that can say no, the voice agent's confirmation gate is theatre.
+- **Raw SQL over psycopg3 rather than SQLAlchemy** for this service — consistent with
+  ADR 0002, and an ORM would add indirection without removing any work here.
+- **Bind-mounted source with `uvicorn --reload`**, so editing a file locally restarts the
+  container's server. Keeps the containerised workflow without slowing the edit loop.
+
+**Bug found and fixed:** `config.py` located the repo-root `.env` with
+`Path(__file__).parents[3]`, which works locally but raises `IndexError` inside the
+container, where the tree is only `/app/app/config.py` deep. Replaced with an upward walk
+that degrades to "no env file" — real environment variables win anyway, which is what
+Docker and Kubernetes supply.
+
+**Verified** (all against real seeded data):
+- Flight status reflects a 120-minute delay in `estimated_departure`
+- Cancel succeeds and creates a `PENDING` refund; cancelling again returns
+  `409 ALREADY_CANCELLED` with `retryable: false`
+- Unknown PNR → `404 BOOKING_NOT_FOUND`; inside the 2h cutoff → `422 NOT_CANCELLABLE`
+- Reschedule moves the booking; a cross-route attempt is refused
+- `flaky` injected 16 failures over 30 requests; `hard_down` returned 503 on every
+  request while `/health` and `/admin` both stayed at 200
+- `rate_limited` returned 429 with `Retry-After: 2`; `corrupt` returned 200 with
+  `{"unexpected":"shape"}`; `slow` measured 3.2–4.0s
+- Per-endpoint override broke `/v1/bookings` (503) while `/v1/flights` stayed at 200
+- Same behaviour natively and in the container
+
+**Next:** Phase 3 — the AI service: `STTProvider` / `LLMProvider` / `TTSProvider`
+interfaces, the tool registry that calls these endpoints, and a text-in/text-out turn.
+
+---
 
 ### 2026-09-17 — Phase 1: Data layer ✅
 
