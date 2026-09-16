@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #18181b;
+  --color-muted: #71717a;
+  --color-line: #e4e4e7;
+  --color-panel: #ffffff;
+  --color-ground: #fafafa;
+  --color-accent: #2563eb;
+  --color-ok: #16a34a;
+  --color-warn: #d97706;
+  --color-bad: #dc2626;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-ink: #fafafa;
+    --color-muted: #a1a1aa;
+    --color-line: #27272a;
+    --color-panel: #18181b;
+    --color-ground: #09090b;
+    --color-accent: #60a5fa;
+  }
+}
+
+html { color-scheme: light dark; }
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-feature-settings: "tnum";
+}
+
+/* Numbers in tables should line up column to column. */
+.tnum { font-variant-numeric: tabular-nums; }

@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 7 — Node platform API + auth ✅ complete |
-| **Next** | Phase 8 — Servicing dashboard (Next.js) |
-| **What runs today** | An authenticated platform API in front of the whole system |
+| **Phase** | 8 — Servicing dashboard ✅ complete |
+| **Next** | Phase 9 — Observability (OpenTelemetry, Prometheus, Grafana, Jaeger) |
+| **What runs today** | The whole platform, usable from a browser behind a login |
 
 ### How to start everything
 
@@ -38,7 +38,8 @@ curl -s localhost:8000/v1/turn -H 'content-type: application/json' \
 against offering every tool), `make test-gate` checks the confirmation gate, and
 `make test-voice` speaks questions at the agent end to end.
 
-`make api` runs the platform API and `make test-rbac` checks the permission matrix.
+`make web` runs the dashboard, `make api` the platform API, and `make test-rbac`
+checks the permission matrix.
 `make worker` runs the queue workers and scheduler (its own terminal), `make queue`
 shows depth and dead letters (`W=1` to watch live), and `make test-queue` checks
 priority, crash recovery, backoff, dead-lettering and idempotency. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
@@ -52,8 +53,9 @@ password `voiceops123`.
 | RedisInsight | http://localhost:5540 |
 | Postgres | `localhost:5432` — `voiceops` / `voiceops` / db `voiceops` |
 | Redis | `localhost:6379` |
+| **Dashboard** | **http://localhost:3001** — sign in and use everything |
 | Platform API | http://localhost:3000 — [docs/api.md](docs/api.md) |
-| AI service | http://localhost:8000 — [API docs](http://localhost:8000/docs) |
+| AI service | http://127.0.0.1:8000 — internal, loopback only |
 | Flight service | http://localhost:8002 — [API docs](http://localhost:8002/docs) |
 | Ollama (host-native) | http://localhost:11434 |
 
@@ -80,6 +82,57 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 8: Servicing dashboard ✅
+
+**Built:** [services/web](services/web/) — Next.js 15 + Tailwind on port 3001. Five screens:
+calls overview, call detail, queue monitor, failure monitor, and a voice console.
+Reference in [docs/dashboard.md](docs/dashboard.md).
+
+Sign in as `agent1@` and then `supervisor@` to see RBAC working: the agent has no Queue or
+Failures tab at all. Nav entries a role cannot use are hidden rather than shown and then
+refused.
+
+**Closed the last unauthenticated hole.** The push-to-talk page lived on the AI service,
+which has no notion of who is calling — and it was binding `0.0.0.0`, so anything on the
+LAN could reach `/v1/turn` and cancel bookings. The console now lives in the dashboard
+behind a login, and the AI service binds loopback only. Verified: from the machine's LAN
+address, `:8000` is unreachable.
+
+**Decisions made:**
+
+- **The queue page polls every 3 seconds**; the others do not. Jobs promote, retry and
+  dead-letter with nobody touching the page, so a static snapshot there would actively
+  mislead — which is not true of a list of finished calls.
+- **Status colours are defined once**, in `lib/ui.tsx`. `DEAD_LETTER` reading red on one
+  screen and grey on another is exactly the kind of inconsistency that makes a dashboard
+  untrustworthy.
+- **The attempt-history table leads with the backoff column**, so the curve is visible
+  rather than asserted.
+- **A latency panel on the calls page** keeps one fact in view: the LLM dominates by an
+  order of magnitude, so that is where optimisation effort belongs.
+- **Permission-gated fetches are skipped, not attempted.** An agent has `calls:read` but
+  not `analytics:read`; requesting analytics anyway would put a 403 in the console on
+  every page load for an entire role.
+- **The JWT lives in `localStorage`**, with the cost stated in the docs rather than
+  glossed: any script on this origin can read it. Moving to an `httpOnly` cookie touches
+  auth on both sides and belongs with the Phase 12 hardening.
+
+**A zsh trap worth remembering:** a shell loop using `path=...` as a variable silently
+destroyed `PATH`, because in zsh lowercase `path` is tied to `PATH` as an array. Every
+command in that session vanished at once.
+
+**Verified:**
+- All five routes compile and render; typecheck clean on both TypeScript services
+- Full path exercised: dashboard login → platform API → AI service → flight service,
+  returning a grounded answer with real delay data
+- AI service returns 404 at `/` and is unreachable from the LAN
+- All five services healthy simultaneously
+
+**Next:** Phase 9 — observability: correlation IDs, OpenTelemetry traces spanning Node →
+Python → worker, Prometheus metrics, and local Grafana/Jaeger.
+
+---
 
 ### 2026-09-17 — Phase 7: Node platform API + auth ✅
 

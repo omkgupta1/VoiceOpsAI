@@ -19,12 +19,13 @@ AI_DIR := services/ai
 WORKER_DIR := services/worker
 QUEUE_DIR := packages/queue-py
 API_DIR := services/api
+WEB_DIR := services/web
 # node is installed via fnm, which is a shell function; call its binary directly.
 NODE_ENV_SETUP := export PATH="$$HOME/.local/share/fnm/aliases/default/bin:$$PATH"
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
         migrate migrate-status seed db-reset chaos chaos-status chaos-off \
-        ai eval test-gate test-voice worker queue test-queue api test-rbac
+        ai eval test-gate test-voice worker queue test-queue api test-rbac web
 
 help: ## Show this help
 	@echo ""
@@ -101,8 +102,8 @@ chaos-off: ## Turn chaos off and restore healthy behaviour
 	  || echo "  failed — is the flight service up? (make up)"
 
 
-ai: ## Run the AI service (natively — it shells out to whisper.cpp and piper)
-	@cd $(AI_DIR) && uv run uvicorn app.main:app --host 0.0.0.0 --port $(AI_PORT) --reload
+ai: ## Run the AI service (internal, loopback only — the API is the way in)
+	@cd $(AI_DIR) && uv run uvicorn app.main:app --host 127.0.0.1 --port $(AI_PORT) --reload
 
 eval: ## Measure tool selection (RUNS=3 to stabilise, MODE=compare vs unscoped)
 	@cd $(AI_DIR) && uv run python eval_tools.py --runs $(RUNS) --mode $(MODE)
@@ -112,6 +113,9 @@ test-gate: ## Verify the confirmation gate still blocks unconfirmed booking chan
 
 test-voice: ## Speak questions at the agent and check it hears and acts on them
 	@cd $(AI_DIR) && uv run python test_voice_loop.py
+
+web: ## Run the servicing dashboard
+	@cd $(WEB_DIR) && $(NODE_ENV_SETUP) && npm run dev
 
 api: ## Run the Node platform API (auth, calls, jobs, analytics)
 	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npm run dev

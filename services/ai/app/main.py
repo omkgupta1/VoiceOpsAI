@@ -6,17 +6,19 @@ speech out. Providers for each layer are selected by environment variable and
 implement the protocols in `app/providers/base.py`, so swapping a local model for
 a hosted one is configuration rather than code.
 
-Phase 3 exposes the text path (`POST /v1/turn`). Phase 4 adds the audio one.
+**This service is internal and unauthenticated.** It enforces the confirmation
+gate (ADR 0004) but has no notion of who is calling, so anything that can reach
+it can cancel bookings. It binds loopback only, and the Node platform API — which
+does check a token — is the sole way in. It previously served a push-to-talk page
+at `/`; that now lives in the dashboard, behind a login.
 """
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from pathlib import Path
-
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 # Importing the tools module is what registers them.
 import app.tools.flight  # noqa: F401
@@ -102,20 +104,12 @@ async def health() -> dict:
 
 app.include_router(router)
 
-_CONSOLE = Path(__file__).parent / "static" / "console.html"
-
-
-@app.get("/", include_in_schema=False)
-async def console() -> FileResponse:
-    """A push-to-talk page for talking to the agent. Served same-origin to keep
-    the microphone permission and the API on one host."""
-    return FileResponse(_CONSOLE)
-
 
 if __name__ == "__main__":
     import uvicorn
 
+    # Loopback only: this service has no authentication of its own.
     uvicorn.run(
-        "app.main:app", host="0.0.0.0", port=settings.ai_port,
+        "app.main:app", host="127.0.0.1", port=settings.ai_port,
         log_level=settings.log_level, reload=True,
     )
