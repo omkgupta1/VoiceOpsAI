@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 6 — Redis queue, scheduler and retry engine ✅ complete |
-| **Next** | Phase 7 — Node platform API + auth |
-| **What runs today** | A voice agent whose confirmed work survives the call and the outage |
+| **Phase** | 7 — Node platform API + auth ✅ complete |
+| **Next** | Phase 8 — Servicing dashboard (Next.js) |
+| **What runs today** | An authenticated platform API in front of the whole system |
 
 ### How to start everything
 
@@ -38,6 +38,7 @@ curl -s localhost:8000/v1/turn -H 'content-type: application/json' \
 against offering every tool), `make test-gate` checks the confirmation gate, and
 `make test-voice` speaks questions at the agent end to end.
 
+`make api` runs the platform API and `make test-rbac` checks the permission matrix.
 `make worker` runs the queue workers and scheduler (its own terminal), `make queue`
 shows depth and dead letters (`W=1` to watch live), and `make test-queue` checks
 priority, crash recovery, backoff, dead-lettering and idempotency. `make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
@@ -51,6 +52,7 @@ password `voiceops123`.
 | RedisInsight | http://localhost:5540 |
 | Postgres | `localhost:5432` — `voiceops` / `voiceops` / db `voiceops` |
 | Redis | `localhost:6379` |
+| Platform API | http://localhost:3000 — [docs/api.md](docs/api.md) |
 | AI service | http://localhost:8000 — [API docs](http://localhost:8000/docs) |
 | Flight service | http://localhost:8002 — [API docs](http://localhost:8002/docs) |
 | Ollama (host-native) | http://localhost:11434 |
@@ -70,12 +72,80 @@ Run `make help` for every available command.
 - **The AI service runs natively, not in Docker** (`make ai`). It shells out to
   whisper.cpp and piper, which must be on the host for Metal. It is the one service
   `docker compose up` does not start.
+- **`pkill -f "app.main"` kills the AI service too**, not just the worker — `uvicorn
+  app.main:app` matches it. Use `pkill -f "python -m app.main"` for the worker alone.
 - **Chaos persists until you turn it off.** If the flight service starts returning 503s
   unexpectedly, run `make chaos-status` — you probably left a scenario applied.
 
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 7: Node platform API + auth ✅
+
+**Built:** [services/api](services/api/) — Fastify + TypeScript on port 3000. JWT auth,
+an RBAC table, call and job endpoints, SQL analytics, and a proxy to the AI service.
+Reference in [docs/api.md](docs/api.md).
+
+**Everything goes through here.** The AI service holds the confirmation gate (ADR 0004),
+so an internet-reachable `/v1/turn` would be a way around authentication entirely —
+anyone who could reach it could cancel bookings. It stays internal; this API is the front
+door.
+
+**Permissions are a table, not scattered checks.** `if (role === 'ADMIN' || role ===
+'SUPERVISOR')` repeated across twenty handlers drifts: someone adds an endpoint, copies
+the wrong condition, and a CX agent can requeue jobs. One table can be read in full in
+seconds and tested exhaustively — `make test-rbac` verifies all 40 role×permission
+combinations, that privilege only increases up the hierarchy, and six denials that would
+matter most if they were ever wrong. 49/49.
+
+**Decisions made:**
+
+- **The TypeScript queue client is a deliberate subset** — enqueue, inspect, requeue.
+  Reservation, leases, the reaper and backoff stay in the Python worker. Two
+  implementations of a distributed algorithm is two chances to get it subtly different,
+  and the differences would only surface under the failures it exists to survive.
+- **Login failures return one code** for wrong password, unknown email and deactivated
+  account alike. Distinguishing them tells an attacker which addresses are real.
+- **401 and 403 stay distinct.** One means "log in", the other "you cannot do this";
+  collapsing them makes both harder to debug.
+- **Transcripts need their own permission.** A supervisor reviewing queue health has no
+  business reading what customers said, so `GET /api/calls/:id` returns the conversation
+  only with `conversations:read`.
+- **Aggregates are computed in SQL.** Postgres has the indexes; shipping ten thousand
+  calls to Node to produce five numbers stops working at exactly the volume a dashboard
+  is for.
+- **Audio is proxied as opaque bytes**, not parsed and rebuilt — this layer has no
+  business looking inside a recording.
+
+**Two problems worth recording:**
+
+- **`pkill -f "app.main"` killed the AI service**, not just the worker: `uvicorn
+  app.main:app` matches that pattern too. It died silently during the Phase 6 crash tests
+  and only surfaced here as a proxy failure. Noted in the gotchas above.
+- **Node resolves `localhost` to `::1` first.** The AI service was bound to `127.0.0.1`,
+  IPv4 only, so the proxy failed with an unhelpful `fetch failed` rather than a connection
+  refused. `AI_SERVICE_URL` now uses an IP and `make ai` binds `0.0.0.0`.
+
+**Also observed working as designed:** a job's history mirror failed with a foreign-key
+violation (I had re-seeded mid-flight, so its `call_id` was gone) and **the job completed
+anyway**. That is the best-effort mirroring from Phase 6 doing its job — losing a history
+row is survivable in a way that losing a cancellation is not.
+
+**Verified:**
+- Login works across all three seeded roles — Python-generated bcrypt hashes verify in
+  Node, which is the cross-language assumption the schema rests on
+- CX_AGENT gets 200 on `/api/calls`, 403 on `/api/jobs` and `/api/analytics/calls`;
+  SUPERVISOR gets 200 on all three; no token and a forged token both get 401
+- Voice turn through the API returns a grounded answer; the same turn without a token is
+  refused
+- A dead-lettered job listed, refused to a CX agent (403), requeued by a supervisor with
+  attempts reset, then completed by the worker
+- Analytics return real figures: 80 calls, 54 successful, 13 escalated, p95 LLM 2,510ms
+
+**Next:** Phase 8 — the servicing dashboard.
+
+---
 
 ### 2026-09-17 — Phase 6: Redis queue, scheduler and retry engine ✅
 

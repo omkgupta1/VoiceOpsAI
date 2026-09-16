@@ -18,10 +18,13 @@ MODE ?= scoped
 AI_DIR := services/ai
 WORKER_DIR := services/worker
 QUEUE_DIR := packages/queue-py
+API_DIR := services/api
+# node is installed via fnm, which is a shell function; call its binary directly.
+NODE_ENV_SETUP := export PATH="$$HOME/.local/share/fnm/aliases/default/bin:$$PATH"
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
         migrate migrate-status seed db-reset chaos chaos-status chaos-off \
-        ai eval test-gate test-voice worker queue test-queue
+        ai eval test-gate test-voice worker queue test-queue api test-rbac
 
 help: ## Show this help
 	@echo ""
@@ -109,6 +112,12 @@ test-gate: ## Verify the confirmation gate still blocks unconfirmed booking chan
 
 test-voice: ## Speak questions at the agent and check it hears and acts on them
 	@cd $(AI_DIR) && uv run python test_voice_loop.py
+
+api: ## Run the Node platform API (auth, calls, jobs, analytics)
+	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npm run dev
+
+test-rbac: ## Verify the role/permission matrix exhaustively
+	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npm test
 
 worker: ## Run the queue workers and scheduler
 	@cd $(WORKER_DIR) && uv run python -m app.main
