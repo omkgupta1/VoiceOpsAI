@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Phase** | 0 — Foundations ✅ complete |
-| **Next** | Phase 1 — Data layer (SQL migrations + seed data) |
-| **What runs today** | Postgres 16 + Redis 7 + admin UIs, via Docker Compose |
+| **Phase** | 1 — Data layer ✅ complete |
+| **Next** | Phase 2 — Mock flight service + chaos engine |
+| **What runs today** | Postgres 16 (full schema + seed data) + Redis 7 + admin UIs |
 
 ### How to start everything
 
@@ -19,8 +19,15 @@
 make setup     # once: creates .env from .env.example
 make models    # once: downloads Whisper + Piper models (~670MB, skips existing)
 make up        # start Postgres, Redis, pgweb, RedisInsight
+make migrate   # apply the SQL schema
+make seed      # load sample data
 make doctor    # verify the whole toolchain is healthy
 ```
+
+`make db-reset` rebuilds the database from zero (drop → migrate → seed) when you
+want a clean slate. Seeded dashboard logins are `admin@voiceops.ai`,
+`supervisor@voiceops.ai`, `agent1@voiceops.ai`, `agent2@voiceops.ai`, all with
+password `voiceops123`.
 
 | Service | URL |
 |---|---|
@@ -46,6 +53,74 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-17 — Phase 1: Data layer ✅
+
+**Built:** the full PostgreSQL schema, a migration runner, and seed data.
+
+**Migration runner** — [scripts/migrate.py](scripts/migrate.py), ~140 lines, no framework.
+Uses `uv`'s inline script dependencies (PEP 723), so there is no venv to manage: `uv run`
+resolves `psycopg` on demand. It tracks applied migrations in `schema_migrations`, runs
+each file in its own transaction, and **checksums every migration** — editing one that is
+already applied is refused outright, since that is the usual way two databases silently
+diverge. Verified by tampering with an applied file and watching it refuse.
+
+**Schema** — 5 migrations, 11 tables, 12 enums:
+
+| Migration | Tables |
+|---|---|
+| `0001_init` | enums + the shared `set_updated_at()` trigger function |
+| `0002_customers_flights_bookings` | `customers`, `flights`, `bookings`, `refunds` |
+| `0003_calls_conversations` | `calls`, `conversations` |
+| `0004_jobs_failures` | `jobs`, `job_attempts`, `failures` |
+| `0005_users_tickets` | `users`, `support_tickets` |
+
+**Seed data** — [scripts/seed.py](scripts/seed.py), deterministic (`random.seed(42)`), covering
+every table: 12 customers, 40 flights, 60 bookings, 80 calls with 415 conversation turns,
+50 jobs with 90 attempts and 71 failures. The dashboard has realistic data to render
+before the voice pipeline produces any real traffic.
+
+**Decisions made:**
+
+- **Native Postgres enums over `text` + `CHECK`.** Self-documenting in pgweb, rejected at
+  the database boundary, one byte smaller. Cost: `ALTER TYPE ... ADD VALUE` to extend.
+  Accepted — these state machines are the stable part of the design.
+- **`calls.duration_ms` is a `GENERATED ALWAYS ... STORED` column.** Derived by Postgres
+  from `started_at`/`ended_at`, so it cannot drift from the timestamps it comes from.
+- **Per-stage latency (`stt_ms`, `llm_ms`, `tts_ms`) recorded on every turn from day one.**
+  Phase 9 metrics and every "where is the time going" question need this, and
+  backfilling it later would be impossible.
+- **`conversations.providers` records which provider served each turn.** With swappable
+  local/hosted providers, a latency regression must be attributable, not guessable.
+- **Partial indexes on the hot polling paths** (`jobs_due_idx`, `jobs_retry_idx`,
+  `calls_needs_attention_idx`). The scheduler and retry sweeper poll constantly but only
+  ever want a thin slice of the table.
+- **`idempotency_key UNIQUE` on `jobs`.** Enqueue twice with the same key and you get the
+  original job back, not a second cancellation of the same booking (overview §1).
+- **`job_attempts` as a separate table** (not in the overview). `jobs` holds current state;
+  this holds the story — which attempt, after how much backoff, failing how. The
+  dashboard's retry-history view depends on it.
+
+**Bug found and fixed during verification:** the first seed run produced a dead-lettered
+job whose attempts included `BookingNotFound` — a PERMANENT error — retried five times.
+That directly contradicts the rule this entire system exists to enforce: permanent errors
+must never be retried. Seed data is read while building the dashboard, so wrong data
+teaches the wrong model. Fixed by splitting `RETRYABLE_MODES` from `PERMANENT_MODES`,
+giving permanent failures exactly one attempt, and keeping one failing dependency per job
+rather than a new random one per attempt. Now enforced by two invariant queries that both
+return zero violations.
+
+**Verified:**
+- `make migrate` applies 5 migrations; re-running is a clean no-op
+- Tampering with an applied migration is refused
+- `make db-reset` rebuilds from zero to identical row counts (deterministic)
+- Call analytics, queue-depth-by-priority, failures-by-service and retry-history queries
+  all return sensible results — the four views the dashboard needs
+- Backoff curve reads 0 / 2s / 4s / 8s / 16s, matching overview §9
+
+**Next:** Phase 2 — the mock flight service with an injectable chaos engine.
+
+---
 
 ### 2026-09-17 — Phase 0: Foundations ✅
 

@@ -11,7 +11,8 @@ WHISPER_SMALL := $(MODELS_DIR)/whisper/ggml-small.en.bin
 PIPER_VOICE := $(MODELS_DIR)/piper/en_US-lessac-medium.onnx
 HF := https://huggingface.co
 
-.PHONY: help doctor setup models up down restart ps logs psql redis clean nuke
+.PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
+        migrate migrate-status seed db-reset
 
 help: ## Show this help
 	@echo ""
@@ -55,6 +56,23 @@ ps: ## Show container status
 
 logs: ## Tail logs from all services
 	@$(COMPOSE) logs -f --tail=100
+
+migrate: ## Apply pending database migrations
+	@uv run scripts/migrate.py
+
+migrate-status: ## Show which migrations are applied vs pending
+	@uv run scripts/migrate.py status
+
+seed: ## Load realistic sample data into the database
+	@uv run scripts/seed.py
+
+db-reset: ## Drop everything and rebuild: migrate + seed from scratch
+	@echo "  Dropping schema public..."
+	@$(COMPOSE) exec -T postgres psql -q -U $${POSTGRES_USER:-voiceops} -d $${POSTGRES_DB:-voiceops} \
+	  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	@$(MAKE) migrate
+	@$(MAKE) seed
+
 
 psql: ## Open a psql shell against the local database
 	@$(COMPOSE) exec postgres psql -U $${POSTGRES_USER:-voiceops} -d $${POSTGRES_DB:-voiceops}
