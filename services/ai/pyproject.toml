@@ -1,0 +1,17 @@
+[project]
+name = "voiceops-ai"
+version = "0.1.0"
+description = "Voice AI orchestration: STT, LLM tool calling, TTS"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "psycopg[binary,pool]>=3.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-multipart>=0.0.12",
+]
+
+[tool.ruff]
+line-length = 100

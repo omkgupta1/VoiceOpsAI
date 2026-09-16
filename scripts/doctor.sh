@@ -21,6 +21,8 @@ have fnm     && ok fnm     "$(fnm --version | awk '{print $2}')"          || bad
 have ollama  && ok ollama  "$(ollama --version 2>/dev/null | awk '{print $NF}')" || bad ollama "brew install ollama"
 have piper   && ok piper   "installed"                                    || bad piper "uv tool install piper-tts"
 have whisper-cli && ok whisper-cli "installed"                            || bad whisper-cli "brew install whisper-cpp"
+# whisper.cpp only accepts 16kHz mono WAV; browsers record WebM/Opus.
+have ffmpeg  && ok ffmpeg  "$(ffmpeg -version 2>/dev/null | head -1 | awk '{print $3}')" || bad ffmpeg "brew install ffmpeg"
 
 echo ""
 echo "  Runtimes"
@@ -43,12 +45,20 @@ echo ""
 echo "  Services"
 if docker info >/dev/null 2>&1; then
   ok "docker daemon" "running"
-  for svc in postgres redis; do
+  for svc in postgres redis flight-mock; do
     state=$(docker compose ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk -v s="$svc" '$1==s{print $2}')
     [ "$state" = "running" ] && ok "$svc" "running" || warn "$svc" "not running — run: make up"
   done
 else
   bad "docker daemon" "start Docker Desktop"
+fi
+
+echo ""
+echo "  AI service"
+if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+  ok "ai service" "$(curl -s http://localhost:8000/health | tr -d ' \n' | sed -n 's/.*"llm":"\([^"]*\)".*/\1/p')"
+else
+  warn "ai service" "not running — run: make ai"
 fi
 
 echo ""

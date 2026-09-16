@@ -11,10 +11,14 @@ WHISPER_SMALL := $(MODELS_DIR)/whisper/ggml-small.en.bin
 PIPER_VOICE := $(MODELS_DIR)/piper/en_US-lessac-medium.onnx
 HF := https://huggingface.co
 FLIGHT_MOCK_PORT ?= 8002
+AI_PORT ?= 8000
 S ?= flaky
+RUNS ?= 1
+AI_DIR := services/ai
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
-        migrate migrate-status seed db-reset chaos chaos-status chaos-off
+        migrate migrate-status seed db-reset chaos chaos-status chaos-off \
+        ai eval test-gate
 
 help: ## Show this help
 	@echo ""
@@ -89,6 +93,16 @@ chaos-off: ## Turn chaos off and restore healthy behaviour
 	@curl -sf -X POST http://localhost:$(FLIGHT_MOCK_PORT)/admin/chaos/reset > /dev/null \
 	  && echo "  chaos disabled" \
 	  || echo "  failed — is the flight service up? (make up)"
+
+
+ai: ## Run the AI service (natively — it shells out to whisper.cpp and piper)
+	@cd $(AI_DIR) && uv run uvicorn app.main:app --host 0.0.0.0 --port $(AI_PORT) --reload
+
+eval: ## Measure tool-selection accuracy (make eval RUNS=3 for a stabler number)
+	@cd $(AI_DIR) && uv run python eval_tools.py --runs $(RUNS)
+
+test-gate: ## Verify the confirmation gate still blocks unconfirmed booking changes
+	@cd $(AI_DIR) && uv run python test_confirmation_gate.py
 
 
 psql: ## Open a psql shell against the local database
