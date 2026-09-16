@@ -1,0 +1,42 @@
+# --- Secrets ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Models (multi-GB, downloaded via `make models`) ---
+models/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# --- Node ---
+node_modules/
+dist/
+build/
+.next/
+*.tsbuildinfo
+.npm/
+
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+*.swp
+
+# --- Local runtime artifacts ---
+tmp/
+*.log
+audio-out/

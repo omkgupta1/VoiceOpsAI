@@ -1,0 +1,79 @@
+# VoiceOps AI — local development stack.
+#
+# Phase 0 brings up only the datastores and their admin UIs.
+# Application services are added to this file as we build them.
+#
+# Note: Ollama and whisper.cpp deliberately run natively on the host,
+# not here — Docker Desktop on macOS has no Metal/GPU passthrough, so
+# containers reach them via host.docker.internal.
+
+name: voiceops
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: voiceops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-voiceops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voiceops}
+      POSTGRES_DB: ${POSTGRES_DB:-voiceops}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voiceops} -d ${POSTGRES_DB:-voiceops}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: voiceops-redis
+    restart: unless-stopped
+    # appendonly keeps queue state across restarts — we care, because
+    # losing a job on `docker compose restart` would hide real bugs.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ---------- Admin UIs (dev only) ----------
+
+  pgweb:
+    image: sosedoff/pgweb:latest
+    container_name: voiceops-pgweb
+    restart: unless-stopped
+    environment:
+      PGWEB_DATABASE_URL: postgres://${POSTGRES_USER:-voiceops}:${POSTGRES_PASSWORD:-voiceops}@postgres:5432/${POSTGRES_DB:-voiceops}?sslmode=disable
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: voiceops-redisinsight
+    restart: unless-stopped
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  redisinsight-data:
