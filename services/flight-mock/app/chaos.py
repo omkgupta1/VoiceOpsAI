@@ -20,6 +20,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from voiceops_telemetry import metrics
+
 from app.config import settings
 
 ErrorKind = Literal["503", "429", "500", "504", "timeout", "malformed"]
@@ -115,9 +117,15 @@ class ChaosMiddleware(BaseHTTPMiddleware):
 
         if random.random() >= config.error_rate:
             state.passed += 1
+            metrics.chaos_requests_total.labels("passed").inc()
             return await call_next(request)
 
         state.injected += 1
+        # Exported so a retry spike on the dashboard can be read next to the
+        # thing that caused it. A backoff curve climbing with no injection
+        # alongside it means something is failing for real.
+        metrics.chaos_requests_total.labels("injected").inc()
+        metrics.chaos_injections_total.labels(config.error_kind).inc()
         return await _inject(config)
 
 

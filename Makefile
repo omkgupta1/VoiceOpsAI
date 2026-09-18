@@ -24,6 +24,7 @@ WEB_DIR := services/web
 NODE_ENV_SETUP := export PATH="$$HOME/.local/share/fnm/aliases/default/bin:$$PATH"
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
+        vendor traces grafana metrics test-trace \
         migrate migrate-status seed reference db-reset chaos chaos-status chaos-off \
         ai eval test-gate test-voice worker queue test-queue api test-rbac web
 
@@ -50,13 +51,16 @@ models: ## Download Whisper + Piper speech models (~1.1GB, skips existing)
 	@test -f $(PIPER_VOICE).json || curl -#L -o $(PIPER_VOICE).json $(HF)/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 	@echo "Models ready:"; du -sh $(MODELS_DIR)/*
 
-up: ## Start the local stack (Postgres, Redis, admin UIs)
+up: vendor ## Start the local stack (datastores, admin UIs, observability)
 	@$(COMPOSE) up -d --wait
 	@echo ""
 	@$(COMPOSE) ps
 	@echo ""
 	@echo "  pgweb        http://localhost:8081"
 	@echo "  RedisInsight http://localhost:5540"
+	@echo "  Jaeger       http://localhost:16686"
+	@echo "  Prometheus   http://localhost:9090"
+	@echo "  Grafana      http://localhost:3002"
 
 down: ## Stop the stack (data volumes are preserved)
 	@$(COMPOSE) down
@@ -136,6 +140,22 @@ queue: ## Show queue depth, counters and dead letters (make queue W=1 to watch)
 test-queue: ## Verify priority, crash recovery, backoff, DLQ and idempotency
 	@cd $(QUEUE_DIR) && uv run python test_queue.py
 
+
+vendor: ## Copy the shared telemetry package into the flight service build context
+	@rsync -a --delete --exclude '__pycache__' --exclude '*.egg-info' \
+	  packages/telemetry-py/ services/flight-mock/vendor/telemetry-py/
+
+traces: ## Open Jaeger
+	@open http://localhost:16686
+
+grafana: ## Open the Grafana dashboard
+	@open http://localhost:3002/d/voiceops-overview
+
+metrics: ## Show what each service is currently exposing to Prometheus
+	@bash scripts/metrics.sh
+
+test-trace: ## Prove one voice call spans every service in a single trace
+	@uv run scripts/verify_trace.py
 
 psql: ## Open a psql shell against the local database
 	@$(COMPOSE) exec postgres psql -U $${POSTGRES_USER:-voiceops} -d $${POSTGRES_DB:-voiceops}

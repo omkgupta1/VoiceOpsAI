@@ -27,23 +27,58 @@ import signal
 import time
 import uuid
 
+import voiceops_telemetry as telemetry
 from app import mirror
 from app.config import settings
 from app.handlers import HANDLERS, JobFailure
-from voiceops_queue import Job, QueueClient, QueueConsumer, Status, classify
+from voiceops_queue import Job, QueueClient, QueueConsumer, Status, classify, parent_context
+from voiceops_telemetry import metrics
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-5s %(name)-18s %(message)s",
-    datefmt="%H:%M:%S",
-)
+# Tracing, structured logging and a scrape endpoint, before anything else runs.
+# The metrics port exists because the worker is not an HTTP server and Prometheus
+# only ever scrapes — it is never pushed to.
+telemetry.setup("worker", metrics_port=settings.metrics_port)
 log = logging.getLogger("worker")
 
 _shutdown = asyncio.Event()
 
 
 async def process(consumer: QueueConsumer, job: Job) -> None:
-    """Run one job and record what happened."""
+    """
+    Run one job inside a span belonging to the call that queued it.
+
+    `job.trace_context` was captured at enqueue, so this attempt — which may be
+    running half a minute later in a different process — attaches to the original
+    voice call's trace rather than starting a fresh one. A retry storm therefore
+    reads as one flame graph: the call, the queue wait, and every attempt nested
+    underneath it.
+
+    The cost of that choice is worth stating: the trace stays open for as long as
+    the retries continue, so a trace opened at ten seconds shows a partial
+    picture and needs a refresh once later attempts land.
+    """
+    with telemetry.span(
+        f"job {job.job_type}",
+        kind=telemetry.SpanKind.CONSUMER,
+        context=parent_context(job.trace_context),
+        attributes={
+            "job.id": job.id,
+            "job.type": job.job_type,
+            "job.priority": str(job.priority),
+            "job.attempt": job.attempt,
+            "job.max_attempts": job.max_attempts,
+            "job.call_id": job.call_id,
+            "worker.id": consumer.worker_id,
+            # Time spent waiting in Redis before a worker picked it up. Queue
+            # latency and handler latency have completely different fixes, and a
+            # single "job took 9s" number hides which one you are looking at.
+            "job.queue_wait_ms": int(max(0.0, time.time() - job.run_at) * 1000),
+        },
+    ) as current:
+        await _run(consumer, job, current)
+
+
+async def _run(consumer: QueueConsumer, job: Job, current) -> None:
     started = time.perf_counter()
     handler = HANDLERS.get(job.job_type)
 
@@ -58,6 +93,8 @@ async def process(consumer: QueueConsumer, job: Job) -> None:
         )
         log.error("job=%s type=%s no handler registered", job.id[:8], job.job_type)
         await mirror.upsert_job(job, str(Status.FAILED))
+        telemetry.fail(current, "no handler registered", code="UNKNOWN_JOB_TYPE")
+        metrics.jobs_total.labels(job.job_type, "failed").inc()
         return
 
     try:
@@ -74,17 +111,44 @@ async def process(consumer: QueueConsumer, job: Job) -> None:
             status_code=failure.status_code, retryable_hint=failure.retryable_hint,
         )
 
+        error_class = "RETRYABLE" if verdict.retryable else "PERMANENT"
+        outcome = {
+            Status.RETRY_WAIT: "retry",
+            Status.DEAD_LETTER: "dead_letter",
+        }.get(status, "failed")
+
+        telemetry.fail(current, failure.message, code=failure.code)
+        current.set_attribute("error.class", error_class)
+        current.set_attribute("error.retryable", verdict.retryable)
+        current.set_attribute("retry.reason", verdict.reason)
+        if delay:
+            # The backoff the retry engine actually chose, on the span that was
+            # delayed by it — so the curve can be read off a trace, not just a
+            # histogram.
+            current.set_attribute("retry.backoff_ms", int(delay * 1000))
+            metrics.job_backoff_seconds.labels(job.job_type).observe(delay)
+
+        metrics.jobs_total.labels(job.job_type, outcome).inc()
+        metrics.job_duration_seconds.labels(job.job_type).observe(elapsed_ms / 1000)
+        metrics.upstream_errors_total.labels(
+            failure.service or "unknown", error_class, failure.code or "UNKNOWN"
+        ).inc()
+        if outcome != "retry":
+            # Only count attempts once a job has stopped being retried, or every
+            # retry would also contribute its own partial count.
+            metrics.job_attempts.labels(job.job_type, outcome).observe(job.attempt)
+
         await mirror.record_attempt(
             job, status=str(Status.FAILED), worker_id=consumer.worker_id,
             duration_ms=elapsed_ms,
-            error_class="RETRYABLE" if verdict.retryable else "PERMANENT",
+            error_class=error_class,
             error_type=failure.code or "UNKNOWN", error_message=failure.message,
             backoff_ms=int(delay * 1000) if delay else None,
         )
         await mirror.upsert_job(job, str(status))
         await mirror.record_failure(
             job, service=failure.service,
-            error_class="RETRYABLE" if verdict.retryable else "PERMANENT",
+            error_class=error_class,
             error_type=failure.code or "UNKNOWN", error_message=failure.message,
             resolution={
                 Status.RETRY_WAIT: "RETRYING",
@@ -124,9 +188,17 @@ async def process(consumer: QueueConsumer, job: Job) -> None:
         )
         await mirror.upsert_job(job, str(status))
         log.exception("job=%s crashed in handler", job.id[:8])
+        current.record_exception(exc)
+        telemetry.fail(current, str(exc), code="HANDLER_CRASH")
+        metrics.jobs_total.labels(job.job_type, "retry" if delay else "failed").inc()
+        metrics.job_duration_seconds.labels(job.job_type).observe(elapsed_ms / 1000)
         return
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    metrics.jobs_total.labels(job.job_type, "success").inc()
+    metrics.job_duration_seconds.labels(job.job_type).observe(elapsed_ms / 1000)
+    metrics.job_attempts.labels(job.job_type, "success").observe(job.attempt)
+    current.set_attribute("job.duration_ms", elapsed_ms)
     await consumer.ack(job, result=str(result))
     await mirror.record_attempt(
         job, status=str(Status.SUCCESS), worker_id=consumer.worker_id, duration_ms=elapsed_ms
@@ -167,6 +239,7 @@ async def scheduler_loop() -> None:
         worker_id="scheduler",
         visibility_timeout=settings.visibility_timeout_sec,
     )
+    client = QueueClient(settings.redis_url, namespace=settings.queue_namespace)
     log.info("scheduler ready (every %.1fs)", settings.scheduler_interval_sec)
 
     try:
@@ -178,9 +251,32 @@ async def scheduler_loop() -> None:
             if recovered:
                 # Always worth a line: this means a worker died holding work.
                 log.warning("recovered %d job(s) from expired leases", recovered)
+            await _publish_depth(client)
             await asyncio.sleep(settings.scheduler_interval_sec)
     finally:
+        await client.close()
         await consumer.close()
+
+
+async def _publish_depth(client: QueueClient) -> None:
+    """
+    Copy queue depth into the Prometheus gauges.
+
+    The scheduler does this rather than the workers because it runs on a fixed
+    tick whether or not anything is happening — a gauge only workers updated
+    would freeze at its last value exactly when the queue was backing up and
+    every worker was busy, which is when the number matters most.
+    """
+    try:
+        live = await client.stats()
+    except Exception:  # noqa: BLE001 - never let a scrape gauge stop the scheduler
+        return
+
+    for priority, depth in live.get("ready", {}).items():
+        metrics.queue_depth.labels(priority, "ready").set(depth)
+    metrics.queue_depth.labels("all", "scheduled").set(live.get("scheduled", 0))
+    metrics.queue_depth.labels("all", "processing").set(live.get("processing", 0))
+    metrics.queue_depth.labels("all", "dead_letter").set(live.get("dead_letter", 0))
 
 
 async def main() -> None:

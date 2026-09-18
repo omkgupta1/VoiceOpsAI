@@ -45,7 +45,7 @@ echo ""
 echo "  Services"
 if docker info >/dev/null 2>&1; then
   ok "docker daemon" "running"
-  for svc in postgres redis flight-mock; do
+  for svc in postgres redis flight-mock jaeger prometheus grafana; do
     state=$(docker compose ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk -v s="$svc" '$1==s{print $2}')
     [ "$state" = "running" ] && ok "$svc" "running" || warn "$svc" "not running — run: make up"
   done
@@ -60,6 +60,27 @@ if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
 else
   warn "ai service" "not running — run: make ai"
 fi
+
+echo ""
+echo "  Observability"
+if curl -sf http://localhost:16686/ >/dev/null 2>&1; then
+  ok "jaeger" "http://localhost:16686"
+else
+  warn "jaeger" "not reachable — run: make up"
+fi
+if curl -sf http://localhost:9090/-/healthy >/dev/null 2>&1; then
+  # A target that is down means a service is not exporting, which is invisible
+  # until you go looking for a metric that turns out never to have arrived.
+  down=$(curl -s 'http://localhost:9090/api/v1/targets?state=active' \
+         | grep -o '"health":"down"' | wc -l | tr -d ' ')
+  if [ "$down" = "0" ]; then ok "prometheus" "all targets up"
+  else warn "prometheus" "$down target(s) down — see http://localhost:9090/targets"; fi
+else
+  warn "prometheus" "not reachable — run: make up"
+fi
+curl -sf http://localhost:3002/api/health >/dev/null 2>&1 \
+  && ok "grafana" "http://localhost:3002" \
+  || warn "grafana" "not reachable — run: make up"
 
 echo ""
 echo "  Config"

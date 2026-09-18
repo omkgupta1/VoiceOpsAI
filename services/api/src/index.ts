@@ -5,8 +5,13 @@
  * and analytics from Postgres, talks to the queue, and proxies voice turns to
  * the AI service — which stays internal.
  */
+// First import in the process, before anything binds a library handle that
+// OpenTelemetry is about to replace. See the note at the top of telemetry.ts.
+import { httpDuration, httpRequests, registry } from './telemetry.js';
+
 import cors from '@fastify/cors';
 import Fastify, { type FastifyError, type FastifyReply, type FastifyRequest } from 'fastify';
+import { trace } from '@opentelemetry/api';
 import { config } from './config.js';
 import { registerAuth } from './auth/plugin.js';
 import { ping, pool } from './lib/db.js';
@@ -21,6 +26,13 @@ const app = Fastify({
   logger: {
     level: config.logLevel,
     transport: config.env === 'local' ? { target: 'pino-pretty' } : undefined,
+    // Stamped on every line, so a log here and a span in Jaeger can be joined
+    // by one id. Without it, "the API logged an error at 16:04" and "this call
+    // was slow" stay two separate investigations of the same incident.
+    mixin() {
+      const context = trace.getActiveSpan()?.spanContext();
+      return context ? { trace_id: context.traceId, span_id: context.spanId } : {};
+    },
   },
   // Audio turns carry a recording; the default 1MB limit rejects them.
   bodyLimit: 25 * 1024 * 1024,
@@ -54,6 +66,43 @@ app.setNotFoundHandler((request, reply) => {
       retryable: false,
     },
   });
+});
+
+/**
+ * Count and time every request, labelled by route template rather than by URL.
+ *
+ * `/api/calls/:id` as a label keeps the metric to one series; the raw URL would
+ * mint a new time series per call id and eventually take Prometheus down. That
+ * failure mode has a name — cardinality explosion — and it is the usual way a
+ * first metrics rollout goes wrong.
+ */
+app.addHook('onResponse', async (request, reply) => {
+  const route = request.routeOptions?.url ?? 'unmatched';
+  const labels = {
+    method: request.method,
+    route,
+    status: String(reply.statusCode),
+  };
+  httpRequests.inc(labels);
+  httpDuration.observe(labels, reply.elapsedTime / 1000);
+});
+
+/**
+ * Hand the trace id back to the caller.
+ *
+ * The dashboard can then show "this request was slow — here is its trace", and
+ * a bug report can carry one id that finds the exact request across all five
+ * services.
+ */
+app.addHook('onSend', async (request, reply, payload) => {
+  const context = trace.getActiveSpan()?.spanContext();
+  if (context) reply.header('x-trace-id', context.traceId);
+  return payload;
+});
+
+app.get('/metrics', async (_request, reply) => {
+  reply.header('content-type', registry.contentType);
+  return registry.metrics();
 });
 
 app.get('/health', async () => {

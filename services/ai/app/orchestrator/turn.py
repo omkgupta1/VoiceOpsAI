@@ -16,9 +16,13 @@ Two things it guarantees:
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+import voiceops_telemetry as telemetry
+from voiceops_telemetry import metrics
 
 from app.config import settings
 from app.core.queue import enqueue_retry
@@ -161,7 +165,28 @@ async def run_turn(
         # state, and the next choice must be made from that state's tools.
         specs = registry.specs(flow.state(current_state).tools) if offer_tools else None
 
-        response = await llm.complete(messages, specs)
+        with telemetry.span(
+            "llm.complete",
+            kind=telemetry.SpanKind.CLIENT,
+            attributes={
+                "llm.iteration": iteration,
+                "llm.tools_offered": len(specs) if specs else 0,
+                "flow.state": current_state,
+            },
+        ) as llm_span:
+            response = await llm.complete(messages, specs)
+            llm_span.set_attribute("llm.provider", response.provider)
+            llm_span.set_attribute("llm.model", response.model)
+            llm_span.set_attribute("llm.duration_ms", response.duration_ms)
+            llm_span.set_attribute("llm.wants_tools", response.wants_tools)
+            if response.wants_tools:
+                llm_span.set_attribute(
+                    "llm.tools_requested", [c.name for c in response.tool_calls]
+                )
+
+        metrics.voice_stage_seconds.labels("llm", response.provider).observe(
+            response.duration_ms / 1000
+        )
         llm_ms += response.duration_ms
         provider, model = response.provider, response.model
 
@@ -205,6 +230,12 @@ async def run_turn(
 
                 if blocked_reason is not None:
                     awaiting_confirmation = True
+                    # Counted so the gate is observable. A structural rule that
+                    # nobody can see firing is one nobody notices has stopped.
+                    metrics.confirmation_gate_total.labels(
+                        "same_turn" if blocked_reason is _SAME_TURN else "needs_readback"
+                    ).inc()
+                    metrics.tool_calls_total.labels(call.name, "blocked").inc()
                     invocations.append(
                         ToolInvocation(
                             name=call.name,
@@ -225,7 +256,35 @@ async def run_turn(
                     )
                     continue
 
-            result: ToolResult = await registry.run(call.name, call.arguments)
+            with telemetry.span(
+                f"tool {call.name}",
+                attributes={
+                    "tool.name": call.name,
+                    "tool.mutating": bool(tool and tool.mutating),
+                    "tool.arguments": json.dumps(call.arguments, default=str),
+                },
+            ) as tool_span:
+                result: ToolResult = await registry.run(call.name, call.arguments)
+                tool_span.set_attribute("tool.ok", result.ok)
+                tool_span.set_attribute("tool.duration_ms", result.duration_ms)
+                if not result.ok:
+                    # A tool failure travels as a return value, never an
+                    # exception, so nothing here raises for the span to catch.
+                    telemetry.fail(
+                        tool_span,
+                        result.error_message or "tool failed",
+                        code=result.error_code,
+                    )
+                    tool_span.set_attribute("error.retryable", bool(result.retryable))
+
+            metrics.tool_calls_total.labels(call.name, "ok" if result.ok else "error").inc()
+            metrics.tool_duration_seconds.labels(call.name).observe(result.duration_ms / 1000)
+            if not result.ok:
+                metrics.upstream_errors_total.labels(
+                    "flight-api",
+                    "RETRYABLE" if result.retryable else "PERMANENT",
+                    result.error_code or "UNKNOWN",
+                ).inc()
 
             executed_this_turn += 1
 

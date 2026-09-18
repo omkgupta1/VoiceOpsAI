@@ -9,8 +9,8 @@
 
 | | |
 |---|---|
-| **Phase** | 8 — Servicing dashboard ✅ complete |
-| **Next** | Phase 9 — Observability (OpenTelemetry, Prometheus, Grafana, Jaeger) |
+| **Phase** | 9 — Observability ✅ complete |
+| **Next** | Phase 10 — Tests + CI (pytest/vitest, testcontainers, k6, GitHub Actions) |
 | **What runs today** | The whole platform, on real airports, real weather and real aircraft |
 
 ### How to start everything
@@ -52,6 +52,9 @@ password `voiceops123`.
 |---|---|
 | pgweb (Postgres UI) | http://localhost:8081 |
 | RedisInsight | http://localhost:5540 |
+| **Jaeger** (traces) | **http://localhost:16686** — `make traces` |
+| **Grafana** (dashboards) | **http://localhost:3002** — `make grafana` |
+| Prometheus | http://localhost:9090 |
 | Postgres | `localhost:5432` — `voiceops` / `voiceops` / db `voiceops` |
 | Redis | `localhost:6379` |
 | **Dashboard** | **http://localhost:3001** — sign in and use everything |
@@ -83,6 +86,123 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-19 — Phase 9: Observability ✅
+
+**The milestone from the plan** — *follow one voice call as a single trace across
+all services* — is met, and is now a single command:
+
+```bash
+make test-trace
+```
+
+It sends a real turn through the platform API and reports what Jaeger received:
+
+```
+api          POST                                    10294ms
+  ai           POST /v1/turn                         10265ms
+    ai           llm.complete                         6748ms   ← choosing the tool
+    ai           tool check_flight_status               74ms
+      flight-mock  GET /v1/flights/{flight_number}/status  29ms
+        flight-mock  SELECT                               18ms
+    ai           llm.complete                         3395ms   ← writing the answer
+```
+
+**10.1 of those 10.3 seconds are the model.** The flight lookup this platform
+exists to perform is 30ms of it. That ratio was always in the analytics; seeing
+it as one nested picture makes it hard to keep forgetting.
+
+**Retries are children of the call that caused them.** The interesting run: a
+confirmed cancellation against a hard-down flight service produced **88 spans
+under one root** — the call, the model choosing `cancel_booking`, the in-call
+failure, five worker attempts with their measured backoff (1884ms → 3155ms →
+5384ms → 14659ms), the dead-letter, a requeue from the dashboard, and the final
+success with the `UPDATE` that actually cancelled the booking. Roughly forty
+seconds and three processes, in one flame graph.
+
+That goes against OpenTelemetry's default advice for queues (span links), and
+[ADR 0006](docs/decisions/0006-queue-retries-as-child-spans.md) records why, and
+what it costs — chiefly that a trace is incomplete until the retries finish.
+
+| File | What |
+|---|---|
+| `packages/telemetry-py/` | **New shared package**: `tracing.py`, `logs.py`, `metrics.py` |
+| `services/api/src/telemetry.ts` | The Node equivalent — OTEL SDK + prom-client |
+| `packages/queue-py/.../propagation.py` | **New** — trace context across Redis, optional import |
+| `packages/queue-py/.../models.py` | `Job.trace_context`, carried through Redis |
+| `packages/queue-py/.../client.py` | Captures the caller's context at enqueue |
+| `services/worker/app/main.py` | Attempt spans parented to the call; queue-depth gauges |
+| `services/ai/app/orchestrator/turn.py` | `llm.complete` and `tool <name>` spans; tool + gate metrics |
+| `services/ai/app/api/routes.py` | `stt.transcribe`, `tts.synthesize`, turn outcome |
+| `services/flight-mock/` | Telemetry vendored into the build context; chaos injections now a metric |
+| `services/api/src/index.ts` | Request metrics, `x-trace-id` header, `trace_id` in every log |
+| `docker-compose.yml` | Jaeger, Prometheus, Grafana |
+| `infra/observability/` | Scrape config, provisioned datasources, 10-panel dashboard |
+| `docs/observability.md` | **New** |
+| `docs/decisions/0006-*.md` | **New** |
+| `scripts/verify_trace.py`, `scripts/metrics.sh` | **New** |
+| `Makefile` | `vendor traces grafana metrics test-trace` |
+
+**🐛 Bugs found while building this**
+
+1. **One import list took down three instrumentations.** `_instrument_libraries`
+   imported the httpx, psycopg and redis instrumentors together, inside one
+   `try`. These packages import the library they patch at module level, so in the
+   flight service — which speaks HTTP and Postgres but never Redis — the redis
+   import raised `ModuleNotFoundError` and the service refused to start. My own
+   docstring claimed each was "guarded on its own"; the code did not do that.
+   Each import now sits inside its own guard.
+
+2. **`/metrics` was a 307.** `app.mount("/metrics", ...)` answers the un-slashed
+   path with a redirect to `/metrics/`. Prometheus follows redirects, so it
+   *worked* — while paying for an extra round trip every five seconds, forever.
+   Replaced with a plain route.
+
+**Decisions**
+
+- **Auto for plumbing, manual for meaning.** HTTP, SQL and Redis spans come free
+  from auto-instrumentation. Hand-written spans cover the voice stages, each tool
+  call, and each job attempt — the ones that carry this project's meaning.
+- **`stt.text` goes on the span.** The most common failure here is the agent
+  acting correctly on a misheard flight number. Without the transcript, the trace
+  shows a confident answer to a question nobody asked.
+- **Route templates, never URLs, as metric labels.** `/api/calls/:id` is one
+  series; the raw URL would mint one per call id and eventually take Prometheus
+  down. Cardinality explosion is the usual way a first metrics rollout fails.
+- **Buckets chosen for this system.** Prometheus defaults top out at 10s, which
+  would put nearly every local 7B call in the last bucket and make p95 useless.
+- **The queue package still works with no telemetry installed.** `propagation.py`
+  degrades to returning nothing, so `test_queue.py` still runs against a bare
+  Redis. A library that cannot be tested in isolation stops being tested.
+- **Export failures are survivable.** Jaeger down means spans are dropped, not
+  requests refused.
+
+**Verify**
+
+```bash
+make up && make worker   # then make ai, make api in their own terminals
+make test-trace          # 12 spans, three services, one trace
+make metrics             # what each service exposes
+open http://localhost:3002/d/voiceops-overview
+```
+
+Regression suites after the changes: **31/31** queue, **7/7** confirmation gate,
+**49/49** RBAC. All five Prometheus targets `up`; every Grafana panel returns real data except
+the confirmation-gate counter, which reads zero until a live block happens (the
+scripted gate test runs in its own process, with its own registry).
+
+**Known gaps**
+
+- **Logs are not in Grafana.** Three panes, and logs are still read in a
+  terminal. Loki would close it; it was not in the plan for this phase.
+- **No sampling.** Every request is traced, which is right locally and wrong on
+  AWS. Phase 12.
+- **The dashboard does not link to traces.** The API returns `x-trace-id` but
+  nothing in the UI surfaces it yet.
+
+**Next** — Phase 10, Tests + CI.
+
+---
 
 ### 2026-09-18 — Dashboard visual redesign ✅
 

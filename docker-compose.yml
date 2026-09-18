@@ -61,6 +61,10 @@ services:
       CHAOS_ERROR_RATE: ${CHAOS_ERROR_RATE:-0.0}
       CHAOS_LATENCY_MS: ${CHAOS_LATENCY_MS:-0}
       CHAOS_ERROR_KIND: ${CHAOS_ERROR_KIND:-503}
+      # Inside the compose network Jaeger is reachable by service name, not via
+      # the host port mapping.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      ENV: local
     ports:
       - "${FLIGHT_MOCK_PORT:-8002}:8002"
     volumes:
@@ -70,6 +74,79 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      jaeger:
+        condition: service_healthy
+
+  # ---------- Observability ----------
+
+  # Jaeger receives OTLP directly, so there is no collector in between. A
+  # collector earns its place when you need sampling, redaction or fan-out to
+  # several backends; here it would be one more process to run and explain.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: voiceops-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # UI
+      - "4318:4318"     # OTLP over HTTP — what the services export to
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:16686/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: voiceops-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # Most scrape targets run natively on the host, not in this network.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: voiceops-grafana
+    restart: unless-stopped
+    environment:
+      # A login on a dashboard nobody else can reach is a speed bump, not
+      # security. The port is bound to this machine.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   # ---------- Admin UIs (dev only) ----------
 
@@ -101,3 +178,5 @@ volumes:
   postgres-data:
   redis-data:
   redisinsight-data:
+  prometheus-data:
+  grafana-data:

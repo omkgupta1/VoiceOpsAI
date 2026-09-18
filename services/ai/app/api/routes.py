@@ -7,6 +7,9 @@ import base64
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+import voiceops_telemetry as telemetry
+from voiceops_telemetry import metrics
+
 from app.core import persistence
 from app.orchestrator.turn import TurnResult, run_turn
 from app.providers.base import Message, ProviderError
@@ -97,6 +100,42 @@ async def _persist(
         call_id=call_id, intent=result.intent,
         escalated=result.escalated, escalation_reason=escalation_reason,
     )
+
+    _record_outcome(call_id, result)
+
+
+def _record_outcome(call_id: str, result: TurnResult) -> None:
+    """
+    Stamp the finished turn onto the request span, and count it.
+
+    The attributes go on the span FastAPI already opened for this request rather
+    than on a span of their own: a child span holding nothing but attributes adds
+    a row to every trace and tells you nothing the parent could not.
+
+    Both routes reach this through `_persist`, so text turns and voice turns are
+    measured the same way — a metric that only counted one of them would quietly
+    under-report exactly as soon as the other got used.
+    """
+    escalated = result.escalated
+    outcome = "escalated" if escalated else "answered" if result.reply else "failed"
+    metrics.turns_total.labels(outcome).inc()
+
+    span = telemetry.current_span()
+    span.set_attribute("call.id", call_id)
+    span.set_attribute("turn.outcome", outcome)
+    span.set_attribute("turn.intent", result.intent or "")
+    span.set_attribute("turn.escalated", escalated)
+    span.set_attribute("turn.awaiting_confirmation", result.awaiting_confirmation)
+    span.set_attribute("turn.iterations", result.iterations)
+    span.set_attribute("turn.llm_ms", result.llm_ms)
+    span.set_attribute("turn.tools_ms", result.tools_ms)
+    span.set_attribute("flow.id", result.flow_id or "")
+    span.set_attribute("flow.state", result.flow_state or "")
+    span.set_attribute("turn.tools_called", [i.name for i in result.tool_invocations])
+    if result.queued_jobs:
+        # The link from a call to the background work it spawned. Those job spans
+        # arrive later, under this same trace.
+        span.set_attribute("turn.queued_job_ids", [j["job_id"] for j in result.queued_jobs])
 
 
 @router.post("/turn", response_model=TurnResponse)
@@ -206,8 +245,26 @@ async def audio_turn(
 
     # ---- Speech to text ----
     try:
-        transcript = await get_stt().transcribe(
-            raw, mime_type=audio.content_type or "audio/wav"
+        with telemetry.span(
+            "stt.transcribe",
+            attributes={
+                "stt.provider": providers.get("stt"),
+                "stt.bytes": len(raw),
+                "stt.mime_type": audio.content_type or "audio/wav",
+                "call.id": resolved_call_id,
+            },
+        ) as stt_span:
+            transcript = await get_stt().transcribe(
+                raw, mime_type=audio.content_type or "audio/wav"
+            )
+            stt_span.set_attribute("stt.duration_ms", transcript.duration_ms)
+            # The transcript itself, because the single most common failure in
+            # this pipeline is the model acting correctly on a misheard flight
+            # number. Without it the trace shows a confident answer to a
+            # question nobody asked.
+            stt_span.set_attribute("stt.text", transcript.text or "")
+        metrics.voice_stage_seconds.labels("stt", providers.get("stt", "unknown")).observe(
+            transcript.duration_ms / 1000
         )
     except ProviderError as exc:
         raise HTTPException(
@@ -285,7 +342,13 @@ async def audio_turn(
 async def _speak(text: str) -> dict | None:
     """Synthesise a reply, returning None rather than raising if TTS is unavailable."""
     try:
-        rendered = await get_tts().synthesize(text)
+        with telemetry.span(
+            "tts.synthesize", attributes={"tts.characters": len(text)}
+        ) as tts_span:
+            rendered = await get_tts().synthesize(text)
+            tts_span.set_attribute("tts.duration_ms", rendered.duration_ms)
+            tts_span.set_attribute("tts.audio_ms", rendered.audio_ms)
+        metrics.voice_stage_seconds.labels("tts", "piper").observe(rendered.duration_ms / 1000)
     except ProviderError:
         return None
     return {

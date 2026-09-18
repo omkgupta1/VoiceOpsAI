@@ -1,0 +1,35 @@
+# What Prometheus scrapes locally.
+#
+# Every target is reached through host.docker.internal because the Python and
+# Node services run natively on the host, not in this compose network — Ollama
+# and whisper.cpp need Metal, which Docker Desktop on macOS does not pass
+# through (ADR 0001), so the services that talk to them stay on the host too.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: ai
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels: { service: ai }
+
+  - job_name: worker
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+        labels: { service: worker }
+
+  - job_name: api
+    static_configs:
+      - targets: ["host.docker.internal:3000"]
+        labels: { service: api }
+
+  - job_name: flight-mock
+    static_configs:
+      - targets: ["flight-mock:8002"]
+        labels: { service: flight-mock }
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

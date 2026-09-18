@@ -17,8 +17,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+import voiceops_telemetry as telemetry
+from voiceops_telemetry import metrics
+
 from app.chaos import ChaosMiddleware
 from app.config import settings
+
+telemetry.setup("flight-mock")
 from app.db import close_pool, fetch_one, open_pool
 from app.routers import admin, bookings, flights, live, refunds
 
@@ -36,6 +41,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+telemetry.instrument_fastapi(app)
+metrics.install(app)
 
 app.add_middleware(ChaosMiddleware)
 

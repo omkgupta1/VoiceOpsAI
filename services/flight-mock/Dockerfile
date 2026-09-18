@@ -9,7 +9,13 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 # Dependencies are their own layer so that editing application code does not
 # invalidate the install on every rebuild.
+#
+# The telemetry package is copied in rather than mounted: this is the one service
+# that runs inside the compose network, so it cannot reach a path outside its own
+# build context. `make up` syncs the copy — see the `vendor` target in the
+# Makefile — which keeps one source of truth for the shared code.
 COPY pyproject.toml ./
+COPY vendor ./vendor
 RUN uv pip install --system --no-cache -r pyproject.toml
 
 COPY app ./app

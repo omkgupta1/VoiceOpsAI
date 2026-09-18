@@ -54,6 +54,12 @@ class Job:
     call_id: str | None = None
     customer_id: str | None = None
 
+    # W3C trace context captured at enqueue, so the attempt that runs thirty
+    # seconds later on another process lands inside the trace of the call that
+    # asked for it. HTTP propagates this in headers automatically; a Redis hash
+    # is just strings, so it has to be carried explicitly.
+    trace_context: dict[str, str] = field(default_factory=dict)
+
     last_error: str | None = None
     last_error_code: str | None = None
     created_at: float = field(default_factory=time.time)
@@ -72,6 +78,7 @@ class Job:
             "idempotency_key": self.idempotency_key or "",
             "call_id": self.call_id or "",
             "customer_id": self.customer_id or "",
+            "trace_context": json.dumps(self.trace_context) if self.trace_context else "",
             "last_error": self.last_error or "",
             "last_error_code": self.last_error_code or "",
             "created_at": str(self.created_at),
@@ -91,6 +98,7 @@ class Job:
             idempotency_key=raw.get("idempotency_key") or None,
             call_id=raw.get("call_id") or None,
             customer_id=raw.get("customer_id") or None,
+            trace_context=json.loads(raw.get("trace_context") or "{}"),
             last_error=raw.get("last_error") or None,
             last_error_code=raw.get("last_error_code") or None,
             created_at=float(raw.get("created_at", 0) or 0),

@@ -13,10 +13,12 @@ dependencies = [
     "python-multipart>=0.0.12",
     "pyyaml>=6.0",
     "voiceops-queue",
+    "voiceops-telemetry",
 ]
 
 [tool.uv.sources]
 voiceops-queue = { path = "../../packages/queue-py", editable = true }
+voiceops-telemetry = { path = "../../packages/telemetry-py", editable = true }
 
 [tool.ruff]
 line-length = 100

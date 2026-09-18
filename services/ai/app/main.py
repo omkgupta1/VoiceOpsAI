@@ -20,6 +20,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+import voiceops_telemetry as telemetry
+from voiceops_telemetry import metrics
+
+# Before the app is built, so auto-instrumentation patches httpx and psycopg
+# before anything imports a client from them. Patching after a module has already
+# bound the unpatched symbol silently does nothing.
+telemetry.setup("ai")
+
 # Importing the tools module is what registers them.
 import app.tools.flight  # noqa: F401
 from app.api.routes import router
@@ -65,6 +73,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+telemetry.instrument_fastapi(app)
+metrics.install(app)
 
 
 @app.exception_handler(HTTPException)

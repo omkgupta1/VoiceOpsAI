@@ -14,6 +14,7 @@ import redis.asyncio as redis
 
 from voiceops_queue.keys import DEFAULT_NAMESPACE, Keys
 from voiceops_queue.models import PRIORITY_ORDER, Job, Priority, Status
+from voiceops_queue.propagation import current_carrier
 
 
 class QueueClient:
@@ -41,6 +42,12 @@ class QueueClient:
                 existing_id = await self.redis.get(key)
                 if existing := await self.get(existing_id):
                     return existing, False
+
+        # Captured here, at the moment of enqueue, because this is the only point
+        # where the calling trace is still on the stack. By the time a worker
+        # reserves the job the caller is long gone.
+        if not job.trace_context:
+            job.trace_context = current_carrier()
 
         due = job.run_at <= time.time()
         job.status = Status.QUEUED if due else Status.SCHEDULED

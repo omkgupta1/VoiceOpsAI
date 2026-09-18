@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     backoff_base_sec: float = 2.0
     backoff_max_sec: float = 300.0
 
+    # Prometheus scrapes this. The worker serves nothing else over HTTP.
+    metrics_port: int = 9101
+
     # How often the scheduler promotes due jobs and reaps expired leases.
     scheduler_interval_sec: float = 1.0
     # Idle poll interval when no work is waiting.

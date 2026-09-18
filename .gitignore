@@ -41,3 +41,4 @@ tmp/
 *.log
 audio-out/
 data/reference/
+services/flight-mock/vendor/

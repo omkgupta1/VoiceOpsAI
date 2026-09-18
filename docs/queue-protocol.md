@@ -105,6 +105,23 @@ booking twice (overview §1). Keys expire after 24 hours.
 The AI service derives its key from the call and the operation
 (`{call_id}:{tool}:{pnr}`), so a customer who repeats themselves produces one job.
 
+## Trace context rides with the job
+
+`Job.trace_context` carries the W3C `traceparent` captured at enqueue, stored in
+the job hash like any other field. HTTP propagates trace context in headers on
+its own; a Redis hash is just strings, so it has to be written in explicitly and
+read back when a worker reserves the job — possibly half a minute later, in
+another process.
+
+The worker starts each attempt span with that context as its **parent**, so a
+retry storm reads as one trace: the call, every attempt, the backoff between
+them, and the dead-letter. See
+[ADR 0006](decisions/0006-queue-retries-as-child-spans.md).
+
+`propagation.py` makes the telemetry import optional, so the queue package still
+works — and `test_queue.py` still runs against a bare Redis — with no
+observability installed at all.
+
 ## Redis holds work, Postgres holds history
 
 The worker mirrors every job, attempt and failure into Postgres. Redis forgets a

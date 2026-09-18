@@ -1,0 +1,18 @@
+# Provisioned so the stack is useful the moment it starts. Clicking through a
+# datasource wizard on every `make clean` teaches nothing and is easy to get
+# subtly wrong.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    uid: voiceops-prometheus
+
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    uid: voiceops-jaeger

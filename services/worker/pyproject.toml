@@ -5,6 +5,7 @@ description = "Queue worker, scheduler and retry engine"
 requires-python = ">=3.12"
 dependencies = [
     "voiceops-queue",
+    "voiceops-telemetry",
     "httpx>=0.27",
     "psycopg[binary,pool]>=3.2",
     "pydantic-settings>=2.6",
@@ -12,6 +13,7 @@ dependencies = [
 
 [tool.uv.sources]
 voiceops-queue = { path = "../../packages/queue-py", editable = true }
+voiceops-telemetry = { path = "../../packages/telemetry-py", editable = true }
 
 [tool.ruff]
 line-length = 100

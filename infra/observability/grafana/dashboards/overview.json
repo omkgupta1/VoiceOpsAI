@@ -1,0 +1,400 @@
+{
+  "uid": "voiceops-overview",
+  "title": "VoiceOps \u2014 overview",
+  "tags": [
+    "voiceops"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "5s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Voice pipeline \u2014 p95 by stage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(voiceops_voice_stage_seconds_bucket[5m])))",
+          "legendFormat": "{{stage}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "The LLM dominates STT and TTS by an order of magnitude. This panel is first on the dashboard so that stays in view: any work on making the agent feel faster belongs in the model, not the codecs."
+    },
+    {
+      "id": 2,
+      "title": "Turn outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(voiceops_turns_total[5m]) * 60)",
+          "legendFormat": "{{outcome}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm"
+        },
+        "overrides": []
+      },
+      "description": "Answered, escalated or failed, per minute."
+    },
+    {
+      "id": 3,
+      "title": "Escalation rate",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(voiceops_turns_total{outcome=\"escalated\"}[15m])) / clamp_min(sum(rate(voiceops_turns_total[15m])), 0.0001)",
+          "legendFormat": "escalated",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "The share of turns the agent handed to a human. The headline quality number: it rises when the model stops coping, whatever the cause.",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Queue depth",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (priority) (voiceops_queue_depth{state=\"ready\"})",
+          "legendFormat": "ready {{priority}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(voiceops_queue_depth{state=\"scheduled\"})",
+          "legendFormat": "retry wait",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "sum(voiceops_queue_depth{state=\"processing\"})",
+          "legendFormat": "in flight",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        },
+        {
+          "refId": "D",
+          "expr": "sum(voiceops_queue_depth{state=\"dead_letter\"})",
+          "legendFormat": "dead letter",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Depth is the signal worker autoscaling will key on in Phase 11. A backlog that grows while 'in flight' stays flat means the workers are blocked, not merely busy."
+    },
+    {
+      "id": 5,
+      "title": "Job outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(voiceops_jobs_total[5m]) * 60)",
+          "legendFormat": "{{outcome}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm"
+        },
+        "overrides": []
+      },
+      "description": "Success, retry and dead-letter rates per minute."
+    },
+    {
+      "id": 6,
+      "title": "Retry backoff \u2014 the curve, as measured",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(voiceops_job_backoff_seconds_bucket[10m])))",
+          "legendFormat": "p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(voiceops_job_backoff_seconds_bucket[10m])))",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Equal jitter, observed rather than asserted. Full jitter was tried first and burned all five attempts in about five seconds, which is no recovery window at all for the service being retried."
+    },
+    {
+      "id": 7,
+      "title": "Upstream errors by class",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (error_class, code) (rate(voiceops_upstream_errors_total[5m]) * 60)",
+          "legendFormat": "{{error_class}} {{code}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm"
+        },
+        "overrides": []
+      },
+      "description": "RETRYABLE was worth another attempt; PERMANENT never would have been. A permanent error climbing here means something is repeatedly sending a request that cannot succeed."
+    },
+    {
+      "id": 8,
+      "title": "Tool calls",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tool, outcome) (rate(voiceops_tool_calls_total[5m]) * 60)",
+          "legendFormat": "{{tool}} {{outcome}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "title": "Confirmation gate blocks",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(voiceops_confirmation_gate_total[5m]) * 60)",
+          "legendFormat": "{{reason}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm"
+        },
+        "overrides": []
+      },
+      "description": "Mutating calls stopped before they ran. This should never be zero for long under real use \u2014 zero means either nobody is trying to change a booking, or the gate has stopped firing."
+    },
+    {
+      "id": 10,
+      "title": "Chaos injections",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "voiceops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 7
+      },
+      "description": "Failures injected on purpose. Sits directly under the retry and backoff panels so a retry spike can be read next to its cause: a backoff curve climbing with nothing here means something is failing for real.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          },
+          "expr": "sum by (kind) (rate(voiceops_chaos_injections_total[5m]) * 60)",
+          "legendFormat": "injected {{kind}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "voiceops-prometheus"
+          },
+          "expr": "sum(rate(voiceops_chaos_requests_total{outcome=\"passed\"}[5m]) * 60)",
+          "legendFormat": "passed through"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
