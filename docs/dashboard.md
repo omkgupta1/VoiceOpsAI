@@ -19,6 +19,51 @@ than shown and then refused.
 | **Failures** | Failures by service and class, retry rate, backoff | `failures:read` |
 | **Console** | Push-to-talk or type, with tools and timings shown per turn | `voice:use` |
 
+## Design system
+
+`app/globals.css` holds every colour, animation and surface style. Components
+never name a literal colour — they read a token — which is why the light theme
+is one media query of overrides rather than a second stylesheet.
+
+| Token | Used for |
+|---|---|
+| `--color-accent` (violet) | the product, primary actions, the LLM stage |
+| `--color-accent2` (cyan) | identifiers, links, in-flight work, STT |
+| `--color-ok` (emerald) | success, healthy, TTS |
+| `--color-warn` (amber) | escalation, retry, retryable failures |
+| `--color-bad` (rose) | failure, dead letter, permanent failures, HIGH priority |
+
+Status colours come from `lib/ui.tsx` and resolve to **inline styles**, not
+Tailwind classes. Tailwind cannot see a class name assembled at runtime, so
+`text-[var(--color-${tone})]` compiles to nothing at all — and only for whichever
+status happened not to be on screen while developing. `toneStyle()` returns a
+style object, which cannot be tree-shaken away.
+
+For the same reason, arbitrary values must spell out `var()`. Tailwind v4 dropped
+the v3 shorthand, so `text-[--color-muted]` emits `color: --color-muted` — invalid
+CSS that the browser silently drops, with no warning and a passing build. Write
+`text-[var(--color-muted)]`.
+
+### Motion
+
+Every animation is defined in `globals.css` and wrapped by a
+`prefers-reduced-motion` guard.
+
+| Class / hook | Where |
+|---|---|
+| `.rise` | staggered entry, delayed by a `--i` custom property |
+| `.lift` | 2px hover lift on cards |
+| `.halo` | pulsing ring on the recording button |
+| `.breathe` | dot on a status that means "running right now" |
+| `.shimmer` | loading skeletons — the layout is final before data lands |
+| `.bar-fill` | bars growing from zero to their measured width |
+| `useCountUp` | queue stats, animating between values rather than from zero |
+| `useFlashOnChange` | a queue number that just moved on its own |
+
+Count-up and flash are on the **queue page only**, because that is the one screen
+whose numbers change while nobody is touching it. Animating a number that only
+moves on reload would be decoration.
+
 ## Notes
 
 - **The queue page polls every 3 seconds.** Jobs promote, retry and dead-letter

@@ -1,36 +1,215 @@
 @import "tailwindcss";
 
+/**
+ * VoiceOps design system.
+ *
+ * Dark is the product's identity — an ops console is looked at for hours, and
+ * the colour here is load-bearing rather than decorative: every status in the
+ * system maps to one hue, used identically on all five screens.
+ *
+ * Tokens are declared once in @theme, which both generates Tailwind utilities
+ * (bg-panel, text-muted, border-line) and exposes the raw custom properties for
+ * the hand-written classes below. The -rgb pairs exist so a colour can be used
+ * at partial alpha — rgb(var(--accent-rgb) / 0.15) — without a second token.
+ */
+
 @theme {
-  --color-ink: #18181b;
-  --color-muted: #71717a;
-  --color-line: #e4e4e7;
-  --color-panel: #ffffff;
-  --color-ground: #fafafa;
-  --color-accent: #2563eb;
-  --color-ok: #16a34a;
-  --color-warn: #d97706;
-  --color-bad: #dc2626;
+  --color-ground: #07070f;
+  --color-panel: #101020;
+  --color-raised: #17172b;
+  --color-line: #262640;
+  --color-ink: #ecebfa;
+  --color-muted: #8b8aab;
+
+  --color-accent: #7c5cff;
+  --color-accent2: #22d3ee;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-bad: #fb7185;
+  --color-pink: #f472b6;
+
+  --accent-rgb: 124 92 255;
+  --accent2-rgb: 34 211 238;
+  --ok-rgb: 52 211 153;
+  --warn-rgb: 251 191 36;
+  --bad-rgb: 251 113 133;
+  --muted-rgb: 139 138 171;
+
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-ink: #fafafa;
-    --color-muted: #a1a1aa;
-    --color-line: #27272a;
-    --color-panel: #18181b;
-    --color-ground: #09090b;
-    --color-accent: #60a5fa;
+/* Light mode is a courtesy, not the design. Because every component reads
+   tokens and never a literal colour, remapping the tokens is the whole job. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-ground: #f6f5fc;
+    --color-panel: #ffffff;
+    --color-raised: #f2f1fa;
+    --color-line: #e3e1f0;
+    --color-ink: #17162a;
+    --color-muted: #6b6a85;
+    --color-accent: #6035f5;
+    --color-accent2: #0891b2;
+    --color-ok: #059669;
+    --color-warn: #b45309;
+    --color-bad: #e11d48;
+    --accent-rgb: 96 53 245;
+    --accent2-rgb: 8 145 178;
+    --ok-rgb: 5 150 105;
+    --warn-rgb: 180 83 9;
+    --bad-rgb: 225 29 72;
+    --muted-rgb: 107 106 133;
   }
 }
 
-html { color-scheme: light dark; }
+html {
+  color-scheme: dark light;
+}
 
 body {
   background: var(--color-ground);
   color: var(--color-ink);
   font-feature-settings: "tnum";
+  min-height: 100vh;
+}
+
+/* The aurora. Three slow-drifting radial washes behind everything, fixed to the
+   viewport so scrolling does not drag them. Pointer-events none, z-index -1:
+   it can never intercept a click. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 42% at 18% 14%, rgb(var(--accent-rgb) / 0.30), transparent 70%),
+    radial-gradient(34% 38% at 82% 12%, rgb(var(--accent2-rgb) / 0.22), transparent 70%),
+    radial-gradient(42% 44% at 62% 88%, rgb(var(--bad-rgb) / 0.16), transparent 72%);
+  filter: blur(40px);
+  animation: drift 26s ease-in-out infinite;
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33%      { transform: translate3d(3%, -4%, 0) scale(1.09); }
+  66%      { transform: translate3d(-3%, 3%, 0) scale(0.95); }
 }
 
 /* Numbers in tables should line up column to column. */
 .tnum { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- surfaces */
+
+.glass {
+  background: color-mix(in oklab, var(--color-panel) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--color-line);
+}
+
+/* A panel lifts towards the pointer and picks up a faint violet edge. The
+   transform is 2px — enough to feel responsive, small enough that a grid of
+   cards does not appear to jitter as the pointer crosses it. */
+.lift {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 220ms ease,
+              border-color 220ms ease;
+}
+.lift:hover {
+  transform: translateY(-2px);
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  box-shadow: 0 12px 30px -12px rgb(var(--accent-rgb) / 0.45);
+}
+
+.grad-text {
+  background: linear-gradient(110deg, var(--color-ink), var(--color-accent) 55%, var(--color-accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---------------------------------------------------------------- motion */
+
+/* Entry stagger. Each element sets --i and inherits the delay from it, so a
+   grid animates in sequence without a per-child rule. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.rise {
+  animation: rise 460ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+/* A live value that just changed. Used on the queue page, where numbers move
+   with nobody touching the screen and a silent change is easy to miss. */
+@keyframes flash {
+  0%   { background-color: rgb(var(--accent-rgb) / 0.35); }
+  100% { background-color: transparent; }
+}
+.flash { animation: flash 900ms ease-out; border-radius: 0.5rem; }
+
+/* The recording button, and anything else that is actively running. */
+@keyframes halo {
+  0%   { box-shadow: 0 0 0 0 rgb(var(--bad-rgb) / 0.55); }
+  70%  { box-shadow: 0 0 0 16px rgb(var(--bad-rgb) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--bad-rgb) / 0); }
+}
+.halo { animation: halo 1.6s ease-out infinite; }
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.breathe { animation: breathe 2.2s ease-in-out infinite; }
+
+/* Loading skeletons: a light sweep rather than a spinner, so the layout is
+   already in its final shape when the data lands. */
+@keyframes shimmer {
+  to { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg,
+    var(--color-raised) 25%,
+    color-mix(in oklab, var(--color-raised) 60%, var(--color-ink)) 50%,
+    var(--color-raised) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* Bars grow from zero to their measured width on first paint. */
+.bar-fill {
+  transition: width 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Everything above is decoration. Someone who has asked their system to stop
+   animating things means it. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .lift:hover { transform: none; }
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--accent-rgb) / 0.6); background-clip: content-box; }
+
+::selection { background: rgb(var(--accent-rgb) / 0.35); }
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}

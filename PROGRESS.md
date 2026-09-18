@@ -84,6 +84,71 @@ Run `make help` for every available command.
 
 ## Log
 
+### 2026-09-18 — Dashboard visual redesign ✅
+
+**What was built** — the dashboard went from a monochrome wireframe to a vivid
+dark console with purposeful motion. No behaviour changed: every route, query,
+permission check and poll interval is exactly as it was.
+
+| File | Change |
+|---|---|
+| `services/web/app/globals.css` | Rewritten as a design system: colour tokens, drifting aurora background, six named animations, reduced-motion guard, custom scrollbar |
+| `services/web/lib/ui.tsx` | Restyled primitives + new `Bar`, `Skeleton`, `Mono`, `useCountUp`, `useFlashOnChange`, `toneStyle`, `toneVar`, `ROW` |
+| `services/web/app/(dash)/layout.tsx` | Gradient wordmark, per-tab accent colour, role-coloured avatar and badge |
+| `services/web/app/login/page.tsx` | Hero mark, glass form, one-click account switcher for the four seeded roles |
+| `services/web/app/(dash)/calls/page.tsx` | Coloured stat cards, animated latency and intent bars, staggered table |
+| `services/web/app/(dash)/calls/[id]/page.tsx` | Speaker-tinted transcript rows, tool calls as coloured chips |
+| `services/web/app/(dash)/queue/page.tsx` | Live count-up stats, flash-on-change, poll heartbeat, backoff bars in the attempt table |
+| `services/web/app/(dash)/failures/page.tsx` | Gradient failure bars, retryable/permanent explained as two coloured cards |
+| `services/web/app/(dash)/console/page.tsx` | Live microphone level meter, halo while recording, suggested-prompt chips |
+
+**🐛 Bug found — and it had been there since Phase 8.** Tailwind v4 removed the
+v3 shorthand where `text-[--color-muted]` meant `var(--color-muted)`. Every one
+of those 91 usages was compiling to invalid CSS:
+
+```css
+.text-\[--color-muted\] { color: --color-muted; }        /* invalid, ignored */
+.font-\[family-name\:--font-mono\] { font-family: --font-mono; }
+```
+
+So muted text was never muted, borders were never drawn, and the monospace font
+never applied. That is a large part of why the dashboard read as flat black. The
+fix was mechanical — `[--color-x]` → `[var(--color-x)]` across all eight files —
+and the compiled stylesheet now carries real declarations.
+
+Worth keeping: the browser gives no warning for this. An unknown custom property
+in a value position is simply dropped, so the page renders, the build passes, the
+typecheck passes, and the only symptom is that the design quietly does not apply.
+Reading the *compiled* CSS rather than the source is what found it.
+
+**Decisions**
+
+- **Tones resolve to inline styles, not class names.** Tailwind cannot see a
+  class assembled at runtime, so `text-[var(--color-${tone})]` would produce no
+  CSS — the same failure mode as the bug above, but only for whichever status
+  was not on screen during development. `toneStyle()` returns a style object
+  instead, which cannot be tree-shaken.
+- **Dark is the design; light is a token remap.** Because no component names a
+  literal colour, the light theme is 17 lines of overrides in one media query.
+- **Motion is tied to meaning.** The count-up and flash are on the queue page
+  only, because that is the one screen whose numbers change while you watch it.
+  Everything animated is wrapped by a `prefers-reduced-motion` guard.
+- **No animation library.** All CSS keyframes plus two small hooks. Nothing was
+  added to `package.json`.
+
+**Verify**
+
+```bash
+cd services/web && npm run typecheck     # clean
+```
+
+Then open http://localhost:3001 — all five routes return 200 and the dev server
+compiles with no warnings.
+
+**Next** — Phase 9, Observability.
+
+---
+
 ### 2026-09-17 — Real data: OpenFlights, NOAA and OpenSky ✅
 
 **Added:** real airports, airlines and routes in the database, plus two tools that reach
