@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 def _find_root_env() -> Path:
     """
     Walk up from this file looking for the repo-root .env.

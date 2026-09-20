@@ -25,6 +25,7 @@ NODE_ENV_SETUP := export PATH="$$HOME/.local/share/fnm/aliases/default/bin:$$PAT
 
 .PHONY: help doctor setup models up down restart ps logs psql redis clean nuke \
         vendor traces grafana metrics test-trace \
+        test test-unit test-integration test-load lint lint-fix \
         migrate migrate-status seed reference db-reset chaos chaos-status chaos-off \
         ai eval test-gate test-voice worker queue test-queue api test-rbac web
 
@@ -113,11 +114,32 @@ chaos-off: ## Turn chaos off and restore healthy behaviour
 ai: ## Run the AI service (internal, loopback only — the API is the way in)
 	@cd $(AI_DIR) && uv run uvicorn app.main:app --host 127.0.0.1 --port $(AI_PORT) --reload
 
+test: ## Run every test that does not need a real model
+	@bash scripts/test.sh
+
+test-unit: ## The fast pass — no database, no Redis, no services at all
+	@bash scripts/test.sh unit
+
+test-integration: ## Tests that need Postgres and Redis (make up first)
+	@bash scripts/test.sh integration
+
+test-load: ## k6 load profile (SCENARIO=turns to include real voice turns)
+	@k6 run $(if $(SCENARIO),-e SCENARIO=$(SCENARIO),) tests/load/voice.js
+
+lint: ## Ruff across every Python package, tsc across both TypeScript ones
+	@uvx ruff check packages services/ai services/worker services/flight-mock scripts
+	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npm run typecheck
+	@cd $(WEB_DIR) && $(NODE_ENV_SETUP) && npm run typecheck
+	@echo "  lint and typecheck clean"
+
+lint-fix: ## Apply every fix ruff can make safely
+	@uvx ruff check --fix packages services/ai services/worker services/flight-mock scripts
+
 eval: ## Measure tool selection (RUNS=3 to stabilise, MODE=compare vs unscoped)
 	@cd $(AI_DIR) && uv run python eval_tools.py --runs $(RUNS) --mode $(MODE)
 
 test-gate: ## Verify the confirmation gate still blocks unconfirmed booking changes
-	@cd $(AI_DIR) && uv run python test_confirmation_gate.py
+	@cd $(AI_DIR) && uv run pytest tests/test_gate.py -v
 
 test-voice: ## Speak questions at the agent and check it hears and acts on them
 	@cd $(AI_DIR) && uv run python test_voice_loop.py
@@ -129,7 +151,7 @@ api: ## Run the Node platform API (auth, calls, jobs, analytics)
 	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npm run dev
 
 test-rbac: ## Verify the role/permission matrix exhaustively
-	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npm test
+	@cd $(API_DIR) && $(NODE_ENV_SETUP) && npx vitest run src/auth
 
 worker: ## Run the queue workers and scheduler
 	@cd $(WORKER_DIR) && uv run python -m app.main
@@ -138,7 +160,7 @@ queue: ## Show queue depth, counters and dead letters (make queue W=1 to watch)
 	@cd $(QUEUE_DIR) && uv run --quiet python ../../scripts/queue_status.py $(if $(W),--watch,)
 
 test-queue: ## Verify priority, crash recovery, backoff, DLQ and idempotency
-	@cd $(QUEUE_DIR) && uv run python test_queue.py
+	@cd $(QUEUE_DIR) && uv run pytest -v
 
 
 vendor: ## Copy the shared telemetry package into the flight service build context

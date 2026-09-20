@@ -1,0 +1,191 @@
+# Pull-request gate.
+#
+# Postgres and Redis come from GitHub's service containers rather than
+# testcontainers: the runner starts them, health-checks them, and has them ready
+# in about five seconds, which keeps the feedback loop short enough that people
+# actually wait for it.
+#
+# There is deliberately no LLM here. A GitHub runner has no GPU and no Ollama, so
+# every test that touches the model uses a scripted provider. Tool-selection
+# quality — the thing a real model is needed to measure — is checked by
+# nightly-eval.yml instead, where a bad night reports a number rather than
+# blocking a merge.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push supersedes the run in flight for the same branch.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: postgresql://voiceops:voiceops@localhost:5432/voiceops
+  REDIS_URL: redis://localhost:6379/0
+  QUEUE_NAMESPACE: voiceops
+  JWT_SECRET: ci-only-not-a-secret
+
+jobs:
+  lint:
+    name: Lint and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/*/package-lock.json
+
+      - name: Ruff
+        run: uvx ruff check packages services/ai services/worker services/flight-mock scripts
+
+      - name: Typecheck the API
+        working-directory: services/api
+        run: npm ci && npm run typecheck
+
+      - name: Typecheck the dashboard
+        working-directory: services/web
+        run: npm ci && npm run typecheck
+
+  unit:
+    name: Unit tests (no services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/*/package-lock.json
+
+      # These run with nothing else alive, which is the point: if this job needs
+      # a database, something has leaked out of the integration suite.
+      - name: Queue package
+        working-directory: packages/queue-py
+        run: uv run pytest -m "not integration"
+
+      - name: AI service
+        working-directory: services/ai
+        run: uv run pytest -m "not integration and not model"
+
+      - name: RBAC matrix
+        working-directory: services/api
+        run: npm ci && npx vitest run src/auth
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: voiceops
+          POSTGRES_PASSWORD: voiceops
+          POSTGRES_DB: voiceops
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U voiceops -d voiceops"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/*/package-lock.json
+
+      # OpenFlights is a third party. Caching it keeps a network hiccup on their
+      # side from turning into a red build on ours.
+      - name: Cache reference data
+        uses: actions/cache@v4
+        with:
+          path: data/reference
+          key: openflights-${{ hashFiles('scripts/load_reference.py') }}
+
+      - name: Migrate, load reference data and seed
+        run: |
+          uv run scripts/migrate.py
+          uv run scripts/load_reference.py
+          uv run scripts/seed.py
+
+      - name: Queue against a real Redis
+        working-directory: packages/queue-py
+        run: uv run pytest
+
+      - name: API against a real Postgres
+        working-directory: services/api
+        run: npm ci && npm test
+
+      - name: Migrations are idempotent
+        # Running them twice must be a no-op. The checksum guard also refuses an
+        # edited migration that has already been applied, which is the failure
+        # this is really watching for.
+        run: |
+          uv run scripts/migrate.py
+          uv run scripts/migrate.py status
+
+  build:
+    name: Docker and dashboard build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/web/package-lock.json
+
+      - name: Sync the vendored telemetry package
+        # The flight service cannot reach outside its build context, so the
+        # shared package is copied in. Building without this succeeds locally
+        # (a stale copy is present) and fails here — exactly the kind of drift
+        # CI should catch.
+        run: make vendor
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the flight service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/flight-mock
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the dashboard
+        working-directory: services/web
+        run: npm ci && npm run build
+
+      - name: Validate the compose file
+        run: docker compose config --quiet

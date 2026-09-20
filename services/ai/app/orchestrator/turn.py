@@ -329,9 +329,12 @@ async def run_turn(
                     continue
 
             # A successful lookup is what makes a later change confirmable.
-            if result.ok and call.name in _SURFACING_TOOLS:
-                if pnr_value := str(call.arguments.get("pnr", "")).upper():
-                    informed.add(pnr_value)
+            if (
+                result.ok
+                and call.name in _SURFACING_TOOLS
+                and (pnr_value := str(call.arguments.get("pnr", "")).upper())
+            ):
+                informed.add(pnr_value)
 
             # Consent is spent on use. A booking that was just changed must be
             # looked up and confirmed again before it can be changed a second time.

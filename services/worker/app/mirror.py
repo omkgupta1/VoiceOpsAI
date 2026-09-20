@@ -20,9 +20,9 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
+from voiceops_queue import Job
 
 from app.config import settings
-from voiceops_queue import Job
 
 log = logging.getLogger("worker.mirror")
 
@@ -54,7 +54,7 @@ async def _connection():
 async def _safe(description: str, coro) -> None:
     try:
         await coro
-    except Exception as exc:  # noqa: BLE001 - history must never break the queue
+    except Exception as exc:
         log.warning("could not mirror %s: %s", description, exc)
 
 

@@ -10,9 +10,11 @@ from voiceops_telemetry.tracing import (
     current_span,
     fail,
     instrument_fastapi,
-    setup as setup_tracing,
     span,
     tracer,
+)
+from voiceops_telemetry.tracing import (
+    setup as setup_tracing,
 )
 
 
@@ -25,7 +27,17 @@ def setup(service: str, *, metrics_port: int | None = None) -> None:
 
 
 __all__ = [
-    "setup", "setup_tracing", "configure_logging", "instrument_fastapi",
-    "span", "tracer", "fail", "current_ids", "current_span", "carrier", "context_from",
-    "SpanKind", "metrics",
+    "SpanKind",
+    "carrier",
+    "configure_logging",
+    "context_from",
+    "current_ids",
+    "current_span",
+    "fail",
+    "instrument_fastapi",
+    "metrics",
+    "setup",
+    "setup_tracing",
+    "span",
+    "tracer",
 ]

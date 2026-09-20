@@ -25,14 +25,15 @@ import logging
 import os
 import signal
 import time
-import uuid
+from contextlib import suppress
 
 import voiceops_telemetry as telemetry
+from voiceops_queue import Job, QueueClient, QueueConsumer, Status, classify, parent_context
+from voiceops_telemetry import metrics
+
 from app import mirror
 from app.config import settings
 from app.handlers import HANDLERS, JobFailure
-from voiceops_queue import Job, QueueClient, QueueConsumer, Status, classify, parent_context
-from voiceops_telemetry import metrics
 
 # Tracing, structured logging and a scrape endpoint, before anything else runs.
 # The metrics port exists because the worker is not an HTTP server and Prometheus
@@ -175,7 +176,7 @@ async def _run(consumer: QueueConsumer, job: Job, current) -> None:
             )
         return
 
-    except Exception as exc:  # noqa: BLE001 - an unexpected bug must not kill the worker
+    except Exception as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         status, delay = await consumer.nack(
             job, error=f"unhandled {type(exc).__name__}: {exc}", code="HANDLER_CRASH"
@@ -269,7 +270,7 @@ async def _publish_depth(client: QueueClient) -> None:
     """
     try:
         live = await client.stats()
-    except Exception:  # noqa: BLE001 - never let a scrape gauge stop the scheduler
+    except Exception:
         return
 
     for priority, depth in live.get("ready", {}).items():
@@ -307,7 +308,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
+    # Ctrl-C is how this process is stopped; a traceback for it is noise.
+    with suppress(KeyboardInterrupt):
         asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

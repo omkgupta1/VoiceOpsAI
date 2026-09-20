@@ -11,7 +11,7 @@ from __future__ import annotations
 import random
 import string
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -95,13 +95,13 @@ async def cancel_booking(pnr: str) -> dict:
 
     # Cancelling minutes before departure is not something a voice agent should
     # be able to do unsupervised, so the backend refuses it outright.
-    cutoff = datetime.now(timezone.utc) + timedelta(hours=settings.cancellation_cutoff_hours)
+    cutoff = datetime.now(UTC) + timedelta(hours=settings.cancellation_cutoff_hours)
     if row["scheduled_departure"] < cutoff:
         raise errors.not_cancellable(
             f"Cancellation closes {settings.cancellation_cutoff_hours} hours before departure"
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await execute(
         "UPDATE bookings SET status='CANCELLED', cancelled_at=%s WHERE id=%s",
         (now, row["id"]),
@@ -217,7 +217,7 @@ async def reschedule_booking(pnr: str, body: RescheduleRequest) -> dict:
         raise errors.not_reschedulable("The replacement flight must serve the same route")
     if target["status"] in ("CANCELLED", "DIVERTED"):
         raise errors.not_reschedulable("The replacement flight is not operating")
-    if target["scheduled_departure"] <= datetime.now(timezone.utc):
+    if target["scheduled_departure"] <= datetime.now(UTC):
         raise errors.not_reschedulable("The replacement flight has already departed")
 
     await execute(

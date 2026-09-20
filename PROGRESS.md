@@ -9,8 +9,8 @@
 
 | | |
 |---|---|
-| **Phase** | 9 — Observability ✅ complete |
-| **Next** | Phase 10 — Tests + CI (pytest/vitest, testcontainers, k6, GitHub Actions) |
+| **Phase** | 10 — Tests + CI ✅ complete |
+| **Next** | Phase 11 — Kubernetes on local `kind` (multi-stage images, KEDA autoscaling on queue depth) |
 | **What runs today** | The whole platform, on real airports, real weather and real aircraft |
 
 ### How to start everything
@@ -86,6 +86,121 @@ Run `make help` for every available command.
 ---
 
 ## Log
+
+### 2026-09-19 — Phase 10: Tests + CI ✅
+
+**130 tests across six suites**, and a pipeline that runs them on every push.
+
+```bash
+make test-unit   # ~2s, needs nothing running
+make test        # + integration, needs `make up`
+make lint        # exactly what CI runs
+make test-load   # k6 against a running API
+```
+
+| Suite | Tests | Needs |
+|---|---|---|
+| Queue — unit | 27 | nothing |
+| Queue — Redis | 10 | Redis |
+| AI service | 26 | nothing |
+| API — RBAC matrix | 52 | nothing |
+| API — HTTP lifecycle | 15 | Postgres + Redis |
+
+The four hand-rolled suites were ported to pytest and vitest, and grew while
+being ported: the queue went from 31 assertions to 37 tests, RBAC from 49 to 52,
+the gate from 7 to 8. New coverage that did not exist before: `Job`
+serialisation, trace propagation, identifier normalisation, flow scoping, and the
+API's HTTP behaviour end to end.
+
+**🐛 Bugs found by the new tests**
+
+1. **`GET /api/calls/:id` returned 500 on a malformed id, marked RETRYABLE.**
+   The raw param went straight into `WHERE id = $1` against a `uuid` column, so
+   Postgres threw and the error handler turned it into a retryable server error
+   — meaning a permanently malformed request would be retried with backoff until
+   the attempt cap ran out. Exactly the failure the error taxonomy exists to
+   prevent, and the same bug fixed in the flight service in Phase 6. Now a 400
+   `INVALID_IDENTIFIER`; `src/lib/ids.ts` guards all four `:id` routes.
+
+2. **A blocking `time.sleep()` inside an async function** in
+   `scripts/queue_status.py` — `make queue W=1` stalled its own event loop,
+   including the Redis client it was about to use again. Found by ruff's ASYNC
+   rules.
+
+3. **`zip()` without `strict=`** in the queue's `stats()`. A silent truncation
+   there would under-report queue depth — precisely the number you look at
+   during an incident.
+
+4. **`telemetry.setup()` bound the metrics port at import time**, so the worker
+   module could not be imported while another instance was running. It broke
+   `import app.main` and would have broken pytest collection. `metrics.serve()`
+   now warns and continues: losing metrics is survivable, refusing to start is
+   not.
+
+**Decisions**
+
+- **Scripted LLM in CI, real model nightly.** The gate must hold for *any* model
+  output, so testing it against a cooperative model proves nothing — and a
+  runner has no GPU. `nightly-eval.yml` measures real tool selection against a
+  hosted free tier, informationally, so an off night never blocks a merge.
+- **GitHub service containers, not testcontainers.** Postgres and Redis are ready
+  in ~5s. Testcontainers would add 20-30s per run for portability this repo does
+  not need yet.
+- **`app.inject()`, not a live server.** `src/app.ts` was split out of
+  `index.ts` so tests drive the real request lifecycle in-process. Starting a
+  server and racing to connect is the usual source of flaky CI.
+- **The RBAC expectation is written by hand.** A test that derives its
+  expectation from the code under test asserts only that the code equals itself.
+- **One `ruff.toml` at the root.** Each package had its own `[tool.ruff]`, and
+  ruff uses the *nearest* config — so the root file was being ignored entirely
+  and the rule set was whatever ruff defaulted to. Removed the per-package
+  sections; every ignore now carries its justification.
+
+**Files**
+
+| File | What |
+|---|---|
+| `ruff.toml` | **New** — one deliberate rule set for every Python package |
+| `packages/queue-py/tests/` | **New** — 4 files, 37 tests |
+| `services/ai/tests/` | **New** — conftest + 3 files, 26 tests |
+| `services/api/src/auth/rbac.test.ts` | Ported to vitest, 52 tests |
+| `services/api/src/app.integration.test.ts` | **New** — 15 tests |
+| `services/api/src/app.ts` | **New** — the app as a factory |
+| `services/api/src/lib/ids.ts` | **New** — UUID validation at the edge |
+| `tests/load/voice.js` | **New** — k6 profile |
+| `.github/workflows/ci.yml` | **New** — lint, unit, integration, build |
+| `.github/workflows/nightly-eval.yml` | **New** — real-model eval, informational |
+| `scripts/test.sh` | **New** — one runner for every suite |
+| `docs/testing.md` | **New** |
+| `Makefile` | `test test-unit test-integration test-load lint lint-fix` |
+
+**Verify**
+
+```bash
+make lint    # clean
+make test    # 6/6 suites
+```
+
+After the changes: `make test-trace` still passes (23 spans, three services) and
+`make doctor` is 25/25 — the lint churn touched a lot of files, so both were
+re-run to prove nothing regressed.
+
+**Known gaps**
+
+- **Formatting is not enforced.** `ruff format` would rewrite 38 files and 2,463
+  lines, which would bury this phase's changes in review. `E501` is ignored for
+  the same reason. Fix: run the formatter as its own change, then add
+  `ruff format --check` to CI.
+- **The nightly eval needs `GROQ_API_KEY`** in repo secrets. Without it the
+  workflow skips rather than failing.
+- **CI has never actually run.** There is no remote yet, so the workflows are
+  written and YAML-validated but unproven. Every step was run locally by hand.
+- **The dashboard has no tests.** No component or end-to-end coverage; `npm run
+  build` in CI is the only thing standing behind it.
+
+**Next** — Phase 11, Kubernetes on local `kind`.
+
+---
 
 ### 2026-09-19 — Phase 9: Observability ✅
 

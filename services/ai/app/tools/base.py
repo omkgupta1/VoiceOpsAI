@@ -13,8 +13,9 @@ in their own words, which is the whole point of putting an LLM in front of an AP
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from app.providers.base import ToolSpec
 
@@ -43,13 +44,13 @@ class ToolResult:
         )
 
     @classmethod
-    def success(cls, data: dict[str, Any], duration_ms: int = 0) -> "ToolResult":
+    def success(cls, data: dict[str, Any], duration_ms: int = 0) -> ToolResult:
         return cls(ok=True, data=data, duration_ms=duration_ms)
 
     @classmethod
     def failure(
         cls, code: str, message: str, *, retryable: bool = False, duration_ms: int = 0
-    ) -> "ToolResult":
+    ) -> ToolResult:
         return cls(
             ok=False, error_code=code, error_message=message,
             retryable=retryable, duration_ms=duration_ms,

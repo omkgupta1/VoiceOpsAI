@@ -20,5 +20,19 @@ dependencies = [
 voiceops-queue = { path = "../../packages/queue-py", editable = true }
 voiceops-telemetry = { path = "../../packages/telemetry-py", editable = true }
 
-[tool.ruff]
-line-length = 100
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# `app` is a directory, not an installed package — the service runs from here.
+pythonpath = ["."]
+markers = [
+    "integration: requires Postgres and the flight service",
+    "model: requires a real LLM — never runs in CI",
+]
+addopts = "-q --strict-markers"

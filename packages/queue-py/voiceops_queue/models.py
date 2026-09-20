@@ -85,7 +85,7 @@ class Job:
         }
 
     @classmethod
-    def from_redis(cls, raw: dict[str, str]) -> "Job":
+    def from_redis(cls, raw: dict[str, str]) -> Job:
         return cls(
             id=raw["id"],
             job_type=raw["job_type"],

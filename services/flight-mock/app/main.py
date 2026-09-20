@@ -14,10 +14,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import voiceops_telemetry as telemetry
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-
-import voiceops_telemetry as telemetry
 from voiceops_telemetry import metrics
 
 from app.chaos import ChaosMiddleware
@@ -80,7 +79,7 @@ async def health() -> dict:
     try:
         await fetch_one("SELECT 1 AS ok")
         database = "up"
-    except Exception as exc:  # noqa: BLE001 - health must report, not raise
+    except Exception as exc:
         database = f"down: {exc}"
 
     return {

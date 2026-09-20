@@ -96,4 +96,4 @@ def configure(service: str, *, level: str | None = None, json_output: bool | Non
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
-__all__ = ["configure", "TraceFilter", "JsonFormatter"]
+__all__ = ["JsonFormatter", "TraceFilter", "configure"]

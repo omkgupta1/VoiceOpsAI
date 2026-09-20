@@ -51,7 +51,7 @@ class Flow(BaseModel):
     states: dict[str, State]
 
     @model_validator(mode="after")
-    def _check_references(self) -> "Flow":
+    def _check_references(self) -> Flow:
         """
         Fail loudly at load time rather than mid-call.
 

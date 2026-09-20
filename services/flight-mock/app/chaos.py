@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-
 from voiceops_telemetry import metrics
 
 from app.config import settings
@@ -50,7 +49,7 @@ class ChaosConfig(BaseModel):
     timeout_hang_ms: int = Field(default=30_000, ge=0)
     # Per-path overrides, so one endpoint can be broken while the rest stay healthy.
     # Keys are path prefixes, e.g. "/v1/bookings".
-    endpoints: dict[str, "ChaosConfig"] = Field(default_factory=dict)
+    endpoints: dict[str, ChaosConfig] = Field(default_factory=dict)
 
 
 ChaosConfig.model_rebuild()

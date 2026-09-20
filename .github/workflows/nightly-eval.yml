@@ -1,0 +1,122 @@
+# Tool selection, measured against a real model.
+#
+# This is the half of the test suite CI cannot otherwise reach. Every test in
+# ci.yml uses a scripted LLM, which proves the confirmation gate and the flow
+# engine behave correctly but says nothing about whether the model still picks
+# the right tool — the thing that actually degrades when a prompt is edited.
+#
+# Informational on purpose. It runs on a schedule and never gates a merge: a
+# hosted model having an off night, or rate-limiting us, must not block work
+# that has nothing to do with it.
+
+name: Nightly eval
+
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Runs per case (higher is steadier, and slower)
+        default: "3"
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  DATABASE_URL: postgresql://voiceops:voiceops@localhost:5432/voiceops
+  # The hosted free tier — there is no GPU on a runner.
+  LLM_PROVIDER: groq
+  GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+jobs:
+  eval:
+    name: Tool-selection accuracy
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: voiceops
+          POSTGRES_PASSWORD: voiceops
+          POSTGRES_DB: voiceops
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U voiceops -d voiceops"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the API key
+        id: key
+        # Skipped, not failed, when the secret is absent. A fork has no access to
+        # it, and a red X on somebody's fork for a missing credential they were
+        # never meant to have is noise.
+        run: |
+          if [ -z "${GROQ_API_KEY}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GROQ_API_KEY is not set — skipping. Add it in Settings → Secrets to enable."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.key.outputs.present == 'true'
+        with:
+          enable-cache: true
+
+      - name: Cache reference data
+        if: steps.key.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          path: data/reference
+          key: openflights-${{ hashFiles('scripts/load_reference.py') }}
+
+      - name: Prepare the database
+        if: steps.key.outputs.present == 'true'
+        run: |
+          uv run scripts/migrate.py
+          uv run scripts/load_reference.py
+          uv run scripts/seed.py
+
+      - name: Start the flight service
+        if: steps.key.outputs.present == 'true'
+        run: |
+          make vendor
+          docker compose up -d --wait flight-mock
+
+      - name: Run the eval
+        if: steps.key.outputs.present == 'true'
+        id: eval
+        working-directory: services/ai
+        run: |
+          uv run python eval_tools.py --runs "${{ inputs.runs || '3' }}" --mode compare \
+            | tee "$RUNNER_TEMP/eval.txt"
+          echo "summary<<EOF" >> "$GITHUB_OUTPUT"
+          tail -30 "$RUNNER_TEMP/eval.txt" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the result
+        if: steps.key.outputs.present == 'true'
+        run: |
+          {
+            echo "## Tool-selection accuracy"
+            echo ""
+            echo '```'
+            echo "${{ steps.eval.outputs.summary }}"
+            echo '```'
+            echo ""
+            echo "Measured against \`$LLM_PROVIDER\`, not the local model this runs on"
+            echo "during development — treat the trend as the signal, not the absolute."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the output
+        if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ github.run_number }}
+          path: ${{ runner.temp }}/eval.txt
+          retention-days: 30

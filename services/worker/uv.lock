@@ -721,6 +721,12 @@ dependencies = [
 [package.metadata]
 requires-dist = [{ name = "redis", specifier = ">=5.2" }]
 
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
 [[package]]
 name = "voiceops-telemetry"
 version = "0.1.0"

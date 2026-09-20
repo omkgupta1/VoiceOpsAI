@@ -14,6 +14,3 @@ dependencies = [
 [tool.uv.sources]
 voiceops-queue = { path = "../../packages/queue-py", editable = true }
 voiceops-telemetry = { path = "../../packages/telemetry-py", editable = true }
-
-[tool.ruff]
-line-length = 100

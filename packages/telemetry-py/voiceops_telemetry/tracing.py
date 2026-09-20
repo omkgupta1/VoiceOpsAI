@@ -15,8 +15,9 @@ Propagation across the queue is the interesting part and lives in `carrier()` /
 from __future__ import annotations
 
 import os
-from typing import Any, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, suppress
+from typing import Any
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -79,7 +80,7 @@ def _instrument_libraries() -> None:
         try:
             imported = __import__(module, fromlist=[attribute])
             getattr(imported, attribute)().instrument()
-        except Exception:  # noqa: BLE001 - telemetry must never block startup
+        except Exception:
             pass
 
 
@@ -87,12 +88,13 @@ def instrument_fastapi(app: Any) -> None:
     """Server spans for every request, plus the route template as the span name."""
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-    try:
-        # /health and /metrics are polled constantly and would drown the traces
-        # of actual work in a view that is meant to be read by a human.
+    # /health and /metrics are polled constantly and would drown the traces of
+    # actual work in a view that is meant to be read by a human.
+    #
+    # Suppressed rather than logged: a service that refuses to start because its
+    # tracing failed is worse than one that starts untraced.
+    with suppress(Exception):
         FastAPIInstrumentor.instrument_app(app, excluded_urls="health,metrics")
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def tracer(name: str) -> trace.Tracer:
@@ -180,6 +182,16 @@ def context_from(headers: Mapping[str, str] | None) -> otel_context.Context | No
 
 
 __all__ = [
-    "setup", "instrument_fastapi", "tracer", "span", "fail", "current_ids", "current_span",
-    "carrier", "context_from", "SpanKind", "Status", "StatusCode",
+    "SpanKind",
+    "Status",
+    "StatusCode",
+    "carrier",
+    "context_from",
+    "current_ids",
+    "current_span",
+    "fail",
+    "instrument_fastapi",
+    "setup",
+    "span",
+    "tracer",
 ]

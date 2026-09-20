@@ -23,7 +23,7 @@ import os
 import random
 import string
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import bcrypt
@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GREEN, DIM, RESET = "\033[32m", "\033[2m", "\033[0m"
 
 random.seed(42)
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 SEED_PASSWORD = "voiceops123"
 
 # Reference tables (airports, airlines, routes) are deliberately absent: they
@@ -181,7 +181,7 @@ def seed(conn: psycopg.Connection) -> dict[str, int]:
     # have variety to work with.
     route_pool = load_routes(conn)
     flights: list[tuple] = []
-    for i in range(40):
+    for _ in range(40):
         code, airline, origin, destination = random.choice(route_pool)
         departure = NOW + timedelta(days=random.randint(-2, 5), hours=random.randint(0, 23))
         duration = timedelta(minutes=random.randint(75, 210))

@@ -65,7 +65,7 @@ async def main() -> int:
                 json={"email": "supervisor@voiceops.ai", "password": "voiceops123"},
             )
             auth.raise_for_status()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             bad(f"could not sign in to {API} — is `make api` running? ({exc})")
             return 1
 
@@ -106,7 +106,11 @@ async def main() -> int:
                     processes = data[0].get("processes", {})
                     if len(spans) > 3:
                         break
-            except Exception:  # noqa: BLE001 - jaeger may still be starting
+            except Exception:  # noqa: S112
+                # Jaeger may still be starting, or the trace may not have been
+                # exported yet. Both are the normal case for the first few
+                # iterations of this poll, so neither is worth reporting — the
+                # loop gives up on its own and the caller reports that.
                 continue
 
         if not spans:

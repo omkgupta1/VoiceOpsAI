@@ -9,7 +9,8 @@ So the import is optional and both functions degrade to doing nothing.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 try:  # pragma: no cover - exercised by whichever half is installed
     from voiceops_telemetry.tracing import carrier as _carrier

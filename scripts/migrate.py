@@ -76,7 +76,7 @@ def ensure_tracking_table(conn: psycopg.Connection) -> None:
 
 def applied_map(conn: psycopg.Connection) -> dict[str, str]:
     rows = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
-    return {version: digest for version, digest in rows}
+    return dict(rows)
 
 
 def cmd_status(conn: psycopg.Connection) -> None:

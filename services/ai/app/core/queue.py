@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import logging
 
-from app.config import settings
 from voiceops_queue import Job, Priority, QueueClient
+
+from app.config import settings
 
 log = logging.getLogger("ai.queue")
 
@@ -56,7 +57,7 @@ async def enqueue_retry(
                 idempotency_key=f"{call_id}:{tool}:{identifier}",
             )
         )
-    except Exception as exc:  # noqa: BLE001 - a queue outage must not break the call
+    except Exception as exc:
         log.warning("could not queue %s for retry: %s", tool, exc)
         return None
 

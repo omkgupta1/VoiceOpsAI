@@ -24,7 +24,6 @@ import tempfile
 from pathlib import Path
 
 import httpx
-
 from app.config import resolve_path, settings
 
 GREEN, RED, DIM, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[0m"

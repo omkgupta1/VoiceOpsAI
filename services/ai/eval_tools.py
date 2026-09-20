@@ -24,13 +24,12 @@ import asyncio
 import sys
 from collections import Counter
 
+import app.tools.flight  # noqa: F401  (registers the tools)
 from app.flows.loader import get_flow
 from app.orchestrator.prompt import SYSTEM_PROMPT
 from app.providers.base import Message, ProviderError
 from app.providers.registry import get_llm
 from app.tools.base import registry
-
-import app.tools.flight  # noqa: F401  (registers the tools)
 
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import base64
 
+import voiceops_telemetry as telemetry
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-
-import voiceops_telemetry as telemetry
 from voiceops_telemetry import metrics
 
 from app.core import persistence

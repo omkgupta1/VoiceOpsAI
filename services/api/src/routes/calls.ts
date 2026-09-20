@@ -4,6 +4,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../lib/db.js';
+import { rejectIfNotUuid } from '../lib/ids.js';
 import { requires, type TokenPayload } from '../auth/plugin.js';
 
 const ListQuery = z.object({
@@ -59,6 +60,7 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/calls/:id', { preHandler: requires('calls:read') }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (rejectIfNotUuid(id, 'id', reply)) return;
 
     const call = await queryOne(
       `SELECT c.*, cu.full_name AS customer_name, cu.phone AS customer_phone, cu.email AS customer_email
@@ -96,6 +98,7 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/calls/:id/escalate', { preHandler: requires('calls:escalate') }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (rejectIfNotUuid(id, 'id', reply)) return;
     const { reason } = (request.body ?? {}) as { reason?: string };
     const user = request.user as TokenPayload;
 

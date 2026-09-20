@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,7 +69,7 @@ async def main() -> int:
             dlq = stats["dead_letter"]
             print(f"    {(RED if dlq else DIM)}dead letter{RESET}             {dlq}")
 
-            print(f"\n  lifetime counters")
+            print("\n  lifetime counters")
             for name in ("enqueued", "succeeded", "retried", "failed", "dead_lettered", "reaped"):
                 print(f"    {name:<15} {counters.get(name, 0)}")
 
@@ -83,7 +82,10 @@ async def main() -> int:
 
             if not watch:
                 return 0
-            time.sleep(1)
+            # await, not time.sleep: a blocking sleep inside an async function
+            # stalls the whole event loop, including the Redis client this loop
+            # is about to use again.
+            await asyncio.sleep(1)
     finally:
         await client.close()
 

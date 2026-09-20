@@ -17,10 +17,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import voiceops_telemetry as telemetry
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-
-import voiceops_telemetry as telemetry
 from voiceops_telemetry import metrics
 
 # Before the app is built, so auto-instrumentation patches httpx and psycopg
@@ -29,7 +28,7 @@ from voiceops_telemetry import metrics
 telemetry.setup("ai")
 
 # Importing the tools module is what registers them.
-import app.tools.flight  # noqa: F401
+import app.tools.flight
 from app.api.routes import router
 from app.config import settings
 from app.core import persistence, queue
@@ -100,7 +99,7 @@ async def health() -> dict:
     try:
         await persistence.ping()
         database = "up"
-    except Exception as exc:  # noqa: BLE001 - health reports, never raises
+    except Exception as exc:
         database = f"down: {exc}"
 
     return {

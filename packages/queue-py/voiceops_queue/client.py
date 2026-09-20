@@ -13,7 +13,7 @@ from typing import Any
 import redis.asyncio as redis
 
 from voiceops_queue.keys import DEFAULT_NAMESPACE, Keys
-from voiceops_queue.models import PRIORITY_ORDER, Job, Priority, Status
+from voiceops_queue.models import PRIORITY_ORDER, Job, Status
 from voiceops_queue.propagation import current_carrier
 
 
@@ -81,7 +81,9 @@ class QueueClient:
             pipe.get(self.keys.stat(counter))
         results = await pipe.execute()
 
-        ready = dict(zip((str(p) for p in PRIORITY_ORDER), results[:3]))
+        # strict: a silent truncation here would under-report queue depth, which
+        # is precisely the number you look at during an incident.
+        ready = dict(zip((str(p) for p in PRIORITY_ORDER), results[:3], strict=True))
         counters = results[6:]
         return {
             "ready": ready,
@@ -92,9 +94,10 @@ class QueueClient:
             "counters": {
                 name: int(value or 0)
                 for name, value in zip(
-                    ("enqueued", "succeeded", "failed", "retried", "dead_lettered", "reaped"),
-                    counters,
-                )
+                ("enqueued", "succeeded", "failed", "retried", "dead_lettered", "reaped"),
+                counters,
+                strict=True,
+            )
             },
         }
 

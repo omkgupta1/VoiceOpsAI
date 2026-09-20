@@ -144,20 +144,49 @@ def asgi_app():
     return make_asgi_app()
 
 
-def serve(port: int) -> None:
-    """Expose /metrics from a process that is not already an HTTP server.
+def serve(port: int) -> bool:
+    """
+    Expose /metrics from a process that is not already an HTTP server.
 
     The worker has no web server of its own, and Prometheus only scrapes — it is
-    never pushed to — so the worker has to open a port purely to be scraped.
+    never pushed to — so the worker opens a port purely to be scraped.
+
+    A port already in use is a warning, not a failure. `setup()` runs at import
+    time, so raising here would make the module un-importable whenever another
+    instance is running — which breaks a second worker, and breaks `pytest`
+    collecting anything that imports it. Losing metrics is survivable; refusing
+    to start is not.
     """
+    import logging
+
     from prometheus_client import start_http_server
 
-    start_http_server(port)
+    try:
+        start_http_server(port)
+        return True
+    except OSError as exc:
+        logging.getLogger("telemetry").warning(
+            "metrics endpoint unavailable on :%d (%s) — continuing without it", port, exc
+        )
+        return False
 
 
 __all__ = [
-    "voice_stage_seconds", "turns_total", "tool_calls_total", "tool_duration_seconds",
-    "confirmation_gate_total", "chaos_injections_total", "chaos_requests_total", "queue_depth", "jobs_total", "job_duration_seconds",
-    "job_backoff_seconds", "job_attempts", "upstream_errors_total",
-    "install", "asgi_app", "serve", "CollectorRegistry",
+    "CollectorRegistry",
+    "asgi_app",
+    "chaos_injections_total",
+    "chaos_requests_total",
+    "confirmation_gate_total",
+    "install",
+    "job_attempts",
+    "job_backoff_seconds",
+    "job_duration_seconds",
+    "jobs_total",
+    "queue_depth",
+    "serve",
+    "tool_calls_total",
+    "tool_duration_seconds",
+    "turns_total",
+    "upstream_errors_total",
+    "voice_stage_seconds",
 ]

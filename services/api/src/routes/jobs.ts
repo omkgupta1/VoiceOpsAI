@@ -4,6 +4,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../lib/db.js';
+import { rejectIfNotUuid } from '../lib/ids.js';
 import { requires } from '../auth/plugin.js';
 import { deadLetters, enqueue, getJob, requeueDeadLetter, stats, PRIORITIES } from '../lib/queue.js';
 
@@ -55,6 +56,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/jobs/:id', { preHandler: requires('jobs:read') }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (rejectIfNotUuid(id, 'id', reply)) return;
 
     const job = await queryOne(`SELECT * FROM jobs WHERE id = $1`, [id]);
     if (!job) {
@@ -77,6 +79,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/jobs/:id/retry', { preHandler: requires('jobs:retry') }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (rejectIfNotUuid(id, 'id', reply)) return;
     const requeued = await requeueDeadLetter(id);
     if (!requeued) {
       return reply.code(404).send({

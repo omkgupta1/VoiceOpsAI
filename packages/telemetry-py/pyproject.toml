@@ -20,6 +20,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voiceops_telemetry"]
-
-[tool.ruff]
-line-length = 100

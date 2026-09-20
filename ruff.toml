@@ -1,0 +1,74 @@
+# Lint rules for every Python package in the repo.
+#
+# One file at the root rather than a section per package: CI lints them together,
+# and three configs that drift produce a build that is green locally and red in
+# CI for reasons nobody can reproduce.
+#
+# The selection is deliberate. Ruff's default (E4, E7, E9, F) catches almost
+# nothing, and "all" spends its time on stylistic opinions that are not worth a
+# failing build. These are the families that catch real defects in this codebase.
+
+line-length = 100
+target-version = "py312"
+
+# A synced copy of packages/telemetry-py, linted at its source.
+exclude = ["services/flight-mock/vendor"]
+
+[lint]
+select = [
+    "E", "W",      # pycodestyle
+    "F",           # pyflakes — unused imports, undefined names
+    "I",           # import sorting
+    "UP",          # pyupgrade — we are on 3.12, write like it
+    "B",           # bugbear — real bug patterns
+    "C4",          # comprehensions
+    "SIM",         # simplify
+    "ASYNC",       # blocking calls inside async functions
+    "S",           # bandit — security
+    "RUF",
+]
+
+ignore = [
+    # FastAPI's whole dependency system is function calls in defaults:
+    # `audio: UploadFile = File(...)`. Flagging it means flagging the framework.
+    "B008",
+    # The repo's scripts are run through `uv run`, not executed directly, so a
+    # shebang without the executable bit is intentional and harmless.
+    "EXE001",
+    # `assert` is how tests assert.
+    "S101",
+    # Bandit's warning about `random` is about cryptography. Every use here is
+    # jitter and seeded test data, where predictability is a feature.
+    "S311",
+    # Line length belongs to the formatter, not the linter — ruff's own docs say
+    # so. `ruff format` is not yet enforced here: running it would rewrite 38
+    # files and 2,463 lines, burying real changes in review. Run it as its own
+    # change, then add `ruff format --check` to CI and drop this ignore.
+    "E501",
+]
+
+[lint.per-file-ignores]
+# Telemetry has to be configured before the modules that use the instrumented
+# libraries are imported — patching after a module has bound the unpatched
+# symbol silently does nothing. That ordering is the point, so E402 here is
+# describing the fix as if it were the bug.
+"services/ai/app/main.py" = ["E402"]
+"services/flight-mock/app/main.py" = ["E402", "S104"]
+# Binding 0.0.0.0 inside a container is how a container is reached.
+"services/*/app/main.py" = ["S104"]
+# Seeded demo credentials, printed in the README and typed into a login form.
+"scripts/seed.py" = ["S105", "S106"]
+# Invoking whisper.cpp and piper is the whole job; both are fixed argv lists
+# with no shell involved.
+"services/ai/app/providers/**" = ["S603", "S607"]
+# The voice-loop check shells out to ffmpeg and the model binaries by design.
+"services/ai/test_voice_loop.py" = ["S603", "S607"]
+# Telemetry must never take a service down. These are deliberate catch-alls with
+# a comment on every one; S110 would have us log an error from the logging setup.
+"packages/telemetry-py/**" = ["S110", "BLE001"]
+# Tests reach into private helpers on purpose — that is where the edge cases are.
+"**/tests/**" = ["S105", "S106", "SLF001"]
+"**/test_*.py" = ["S105", "S106", "SLF001"]
+
+[format]
+quote-style = "double"
