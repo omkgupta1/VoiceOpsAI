@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -30,15 +31,16 @@ _TIMESTAMP = re.compile(r"\[\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3
 _NON_SPEECH = {"[BLANK_AUDIO]", "[SILENCE]", "(silence)", "[MUSIC]", "[NOISE]"}
 
 
+def _run_blocking(command: list[str], *, stdin: bytes | None = None) -> tuple[int, bytes, bytes]:
+    result = subprocess.run(command, input=stdin, capture_output=True)
+    return result.returncode, result.stdout, result.stderr
+
+
 async def _run(command: list[str], *, stdin: bytes | None = None) -> tuple[int, bytes, bytes]:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.PIPE if stdin else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, err = await process.communicate(input=stdin)
-    return process.returncode or 0, out, err
+    # asyncio.create_subprocess_exec needs a ProactorEventLoop, which is
+    # incompatible with psycopg's async pool (needs a SelectorEventLoop) — so
+    # subprocesses run on a thread instead, portable across both loop types.
+    return await asyncio.to_thread(_run_blocking, command, stdin=stdin)
 
 
 class LocalWhisperSTT:

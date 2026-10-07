@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 import tempfile
 import time
 import wave
@@ -46,18 +47,19 @@ class PiperTTS:
         with tempfile.TemporaryDirectory(prefix="voiceops-tts-") as tmp:
             output = Path(tmp) / "speech.wav"
 
-            process = await asyncio.create_subprocess_exec(
-                self.binary, "-m", str(self.voice_path), "-f", str(output),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            # asyncio subprocess needs a ProactorEventLoop, incompatible with
+            # psycopg's async pool (needs a SelectorEventLoop) — run on a thread.
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [self.binary, "-m", str(self.voice_path), "-f", str(output)],
+                input=text.encode(),
+                capture_output=True,
             )
-            _, err = await process.communicate(input=text.encode())
 
-            if process.returncode != 0 or not output.is_file():
+            if result.returncode != 0 or not output.is_file():
                 raise ProviderError(
                     self.name,
-                    f"piper exited {process.returncode}: {err.decode(errors='replace')[:200]}",
+                    f"piper exited {result.returncode}: {result.stderr.decode(errors='replace')[:200]}",
                     retryable=False, code="SYNTHESIS_FAILED",
                 )
 

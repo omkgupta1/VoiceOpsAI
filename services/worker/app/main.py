@@ -287,8 +287,12 @@ async def main() -> None:
     args = parser.parse_args()
 
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _shutdown.set)
+    if hasattr(loop, "add_signal_handler"):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _shutdown.set)
+            except NotImplementedError:
+                break
 
     await mirror.open_pool()
 
@@ -308,6 +312,11 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        # psycopg's async mode needs a selector-based loop; ProactorEventLoop
+        # (Windows' asyncio default) can't run it.
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     # Ctrl-C is how this process is stopped; a traceback for it is noise.
     with suppress(KeyboardInterrupt):
         asyncio.run(main())

@@ -42,3 +42,6 @@ tmp/
 audio-out/
 data/reference/
 services/flight-mock/vendor/
+
+# --- Local binary tooling (downloaded, not vendored) ---
+tools/

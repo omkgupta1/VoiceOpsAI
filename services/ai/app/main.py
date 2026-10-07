@@ -15,9 +15,17 @@ at `/`; that now lives in the dashboard, behind a login.
 
 from __future__ import annotations
 
+import asyncio
+import os
 from contextlib import asynccontextmanager
 
 import voiceops_telemetry as telemetry
+
+if os.name == "nt":
+    # psycopg's async mode needs a selector-based loop; ProactorEventLoop
+    # (Windows' asyncio default) can't run it.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from voiceops_telemetry import metrics
